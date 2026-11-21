@@ -3,7 +3,7 @@
 > 🚧 This is being turned into **agent-groupchat**: any AIs you have, several copies of each, and roles
 > with real permissions. See [SPEC.md](SPEC.md). For now it works with Claude Code + Codex, as below.
 
-Start it with:  `python3 server.py`  →  http://127.0.0.1:8765  (change the port with `GROUPCHAT_PORT`)
+Start it with:  `python3 -m agent_groupchat`  (from this folder)  →  http://127.0.0.1:8765  (change the port with `GROUPCHAT_PORT`)
 
 - **Sidebar**: all your chats. Click one to reopen it; it reopens the last chat automatically.
 - **New chat**: pick a name, a project folder, a mode and the number of discussion rounds.
@@ -69,5 +69,12 @@ This lets `bwrap` (and only `bwrap`) create user namespaces again. It's the setu
 documents for sandboxing tools. The page notices within about a minute.
 
 ## Files
-`server.py` (backend), `index.html` (page). Your data is in `~/.agent-groupchat/`: `chats/` and `logs/server.log`
+`agent_groupchat/server.py` (chat engine + web server), `agent_groupchat/adapters/` (one file per AI:
+`claude.py`, `codex.py`), `agent_groupchat/static/index.html` (page). Your data is in `~/.agent-groupchat/`: `chats/` and `logs/server.log`
 (the log is used when the server runs in the background). Stop it with Ctrl+C in its terminal.
+
+## Tests
+```
+python3 -m unittest discover -s tests -t .
+```
+They use fake `claude` / `codex` programs (`tests/bin/`), so they run in seconds and cost nothing.

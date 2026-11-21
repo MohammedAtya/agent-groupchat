@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Local group chat: you + Claude Code + Codex CLI on one page.
+"""Local group chat: you + your AI agents (Claude Code, Codex CLI) on one page.
 
-Run:  python3 server.py   then open http://127.0.0.1:8765
+Run:  python3 -m agent_groupchat   then open http://127.0.0.1:8765
 
 - Many chats, each saved in ~/.agent-groupchat/chats/<id>.json (sidebar to reopen any of them).
 - Each chat is backed by a REAL Claude Code session and a REAL Codex session,
@@ -28,6 +28,10 @@ import difflib
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from .adapters import ADAPTERS, RunContext
+from .adapters.base import rel
+from .skills import frontmatter
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 # User data lives outside the code folder, so updating/reinstalling never touches it and
 # it can never end up in git. AGENT_GROUPCHAT_HOME overrides it (used by tests).
@@ -38,7 +42,7 @@ LOGS_DIR = os.path.join(DATA_DIR, "logs")
 LOG_FILE = os.path.join(LOGS_DIR, "server.log")
 PORT = int(os.environ.get("GROUPCHAT_PORT", "8765"))
 BOT_TIMEOUT = 900  # seconds per reply (work mode can take a while)
-BOTS = ("claude", "codex")
+BOTS = tuple(ADAPTERS)  # agent ids, e.g. ("claude", "codex")
 PASS = "PASS"
 MAX_HANDOFFS = 3  # max AI->AI hand-offs after one user message (stops ping-pong)
 
@@ -53,13 +57,8 @@ os.makedirs(CHATS_DIR, exist_ok=True)
 os.makedirs(LOGS_DIR, exist_ok=True)
 lock = threading.RLock()
 chats = {}      # id -> chat dict
-typing = {}     # id -> {"claude": bool, "codex": bool}
+typing = {}     # id -> {bot: bool}
 workers = {}    # id -> running worker thread
-
-READ_TOOLS = ["Read", "Glob", "Grep", "WebSearch", "WebFetch", "Skill", "TodoWrite"]
-EDIT_TOOLS = READ_TOOLS + ["Edit", "Write", "NotebookEdit"]
-WORK_TOOLS = EDIT_TOOLS + ["Bash"]
-CLAUDE_SANDBOX = json.dumps({"sandbox": {"enabled": True, "autoAllowBashIfSandboxed": True}})
 
 _sandbox = {"ok": None, "checked": 0}
 
@@ -137,7 +136,7 @@ def new_chat(folder, mode="talk", rounds=0, title=""):
         "rounds": rounds, "created": time.time(), "updated": time.time(),
         "messages": [],
         "seen": {b: 0 for b in BOTS},          # index of first message each bot hasn't seen
-        "sessions": {"claude": None, "codex": None},
+        "sessions": {b: None for b in BOTS},
     }
     with lock:
         chats[cid] = chat
@@ -162,11 +161,11 @@ def diff_path(cid, idx):
 
 # ---------------------------------------------------------------- prompts
 def intro(bot, chat):
-    name, other = ("Claude", "Codex (OpenAI's coding agent)") if bot == "claude" \
-        else ("Codex", "Claude (Anthropic's Claude Code)")
+    me = ADAPTERS[bot]
     mode = ABILITY_TEXT[abilities(chat)]
     return (
-        f"You are {name}, a member of a group chat with a human user and {other}. "
+        f"You are {me.name}, a member of a group chat with a human user and "
+        f"{ADAPTERS[other(bot)].description}. "
         f"Project folder: {chat['folder']}. {mode}\n"
         "Messages arrive labeled [User], [Claude] or [Codex]. Both AIs get each user message "
         "at the same time and answer independently; afterwards you may see each other's answers. "
@@ -174,93 +173,12 @@ def intro(bot, chat):
         "other AI directly. Never prefix your reply with your own name. "
         f"If you are shown only the other AI's reply and have nothing useful to add, "
         f"reply with exactly {PASS}."
-        + (" Note: in your workspace-write sandbox, empty read-only .git/.codex/.agents/.aws "
-           "folders can appear in the project; they are sandbox mount points, not real files, "
-           "so don't report them as project contents." if bot == "codex" else "")
+        + me.intro_note
     )
 
 
 # ---------------------------------------------------------------- skills
-HOME = os.path.expanduser("~")
 _skill_cache = {}  # folder -> (time, list)
-
-
-def frontmatter(path):
-    meta = {}
-    try:
-        with open(path, encoding="utf-8", errors="replace") as f:
-            lines = f.read(8000).splitlines()
-    except OSError:
-        return meta
-    if not lines or lines[0].strip() != "---":
-        return meta
-    key = None
-    for line in lines[1:]:
-        if line.strip() == "---":
-            break
-        m = re.match(r"^([\w-]+):\s*(.*)$", line)
-        if m:
-            key, val = m.group(1), m.group(2).strip()
-            meta[key] = "" if val in (">", ">-", "|", "|-") else val.strip("\"'")
-        elif key and line.startswith((" ", "\t")):  # YAML folded/indented continuation
-            meta[key] = (meta[key] + " " + line.strip()).strip()
-    return meta
-
-
-def ancestors(folder):
-    """folder and its parents, stopping at $HOME (inclusive) or /."""
-    out, cur = [], os.path.abspath(folder)
-    while True:
-        out.append(cur)
-        if cur in (HOME, "/"):
-            break
-        cur = os.path.dirname(cur)
-    return out
-
-
-def scan_skill_dirs(roots, recursive=False):
-    found = []
-    for root in roots:
-        if not os.path.isdir(root):
-            continue
-        if recursive:
-            for dp, dns, fns in os.walk(root):
-                if "SKILL.md" in fns:
-                    found.append(os.path.join(dp, "SKILL.md"))
-                    dns[:] = []
-        else:
-            for name in sorted(os.listdir(root)):
-                p = os.path.join(root, name, "SKILL.md")
-                if os.path.isfile(p):
-                    found.append(p)
-    return found
-
-
-def claude_skill_files(folder):
-    roots = [os.path.join(HOME, ".claude", "skills")]
-    roots += [os.path.join(d, ".claude", "skills") for d in ancestors(folder) if d != HOME]
-    files = scan_skill_dirs(roots)
-    try:
-        with open(os.path.join(HOME, ".claude", "plugins", "installed_plugins.json")) as f:
-            plugins = json.load(f).get("plugins", {})
-        for entries in plugins.values():
-            for e in entries:
-                files += scan_skill_dirs([os.path.join(e["installPath"], "skills")], recursive=True)
-    except Exception:
-        pass
-    cmds = []
-    for d in [os.path.join(HOME, ".claude", "commands")] + \
-             [os.path.join(a, ".claude", "commands") for a in ancestors(folder) if a != HOME]:
-        if os.path.isdir(d):
-            cmds += [os.path.join(d, n) for n in sorted(os.listdir(d)) if n.endswith(".md")]
-    return files, cmds
-
-
-def codex_skill_files(folder):
-    roots = [os.path.join(HOME, ".codex", "skills"), os.path.join(HOME, ".codex", "skills", ".system"),
-             os.path.join(HOME, ".agents", "skills")]
-    roots += [os.path.join(d, ".agents", "skills") for d in ancestors(folder) if d != HOME]
-    return scan_skill_dirs(roots)
 
 
 def list_skills(folder):
@@ -281,13 +199,12 @@ def list_skills(folder):
         if bot not in s["bots"]:
             s["bots"].append(bot)
 
-    files, cmds = claude_skill_files(folder)
-    for p in files:
-        put(p, "claude")
-    for p in cmds:
-        put(p, "claude", is_cmd=True)
-    for p in codex_skill_files(folder):
-        put(p, "codex")
+    for bot, adapter in ADAPTERS.items():
+        files, cmds = adapter.skill_files(folder)
+        for p in files:
+            put(p, bot)
+        for p in cmds:
+            put(p, bot, is_cmd=True)
     for s in skills.values():
         s["bots"].sort()
     result = sorted(skills.values(), key=lambda s: s["name"])
@@ -295,7 +212,8 @@ def list_skills(folder):
     return result
 
 
-SKILL_RE = re.compile(r"^\s*(?:@(?:claude|codex)\b[\s,:]*)*/([\w:.-]+)(.*)$", re.I | re.S)
+_BOT_RE = "|".join(map(re.escape, BOTS))
+SKILL_RE = re.compile(rf"^\s*(?:@(?:{_BOT_RE})\b[\s,:]*)*/([\w:.-]+)(.*)$", re.I | re.S)
 
 
 def parse_skill(text, folder):
@@ -312,7 +230,7 @@ def parse_skill(text, folder):
 
 def mentioned(text):
     """Bots @-mentioned anywhere in text, e.g. '@claude', 'hey @Codex,'."""
-    found = {m.lower() for m in re.findall(r"(?<![\w@])@(claude|codex)\b", text, re.I)}
+    found = {m.lower() for m in re.findall(rf"(?<![\w@])@({_BOT_RE})\b", text, re.I)}
     return [b for b in BOTS if b in found]
 
 
@@ -333,7 +251,12 @@ def unseen_for(chat, bot):
 def label(m):
     if (m.get("meta") or {}).get("role") == "summary":
         return "Chat summary"
-    return m["who"].capitalize()
+    return display(m["who"])
+
+
+def display(who):
+    """'claude' -> 'Claude' (the adapter's name), 'user' -> 'User'."""
+    return ADAPTERS[who].name if who in ADAPTERS else who.capitalize()
 
 
 def format_msgs(msgs):
@@ -372,12 +295,11 @@ def outcome(reply):
 
 
 # ---------------------------------------------------------------- bot calls
-# Both CLIs stream JSON events. We read them as they arrive to show live activity
-# ("editing server.py", "$ pytest") and keep the process handle so Stop can kill it.
+# Agent CLIs stream JSON events. Adapters read them as they arrive to show live activity
+# ("editing server.py", "$ pytest"); stream() keeps the process handle so Stop can kill it.
 procs = {}      # (chat id, bot) -> running Popen
 activity = {}   # chat id -> {bot: {"since": t, "steps": [recent activity lines]}}
 halted = set()  # chat ids where the user pressed Stop; cleared by their next message
-EDIT_NAMES = ("Edit", "MultiEdit", "Write", "NotebookEdit")
 
 
 def kill(p, reason):
@@ -427,6 +349,7 @@ def stream(chat, bot, cmd, on_event):
         finally:
             timer.cancel()
             procs.pop(key, None)
+            p.stdout.close()
         err.seek(0)
         return p.returncode, err.read()[-800:].strip(), p.gc_reason
 
@@ -442,187 +365,27 @@ def step(chat, bot, text):
 
 
 def set_text(chat, bot, text, append=False):
-    """Live preview of the reply being written (Claude: token by token; Codex: per message)."""
+    """Live preview of the reply being written (token by token or per message, per agent)."""
     with lock:
         a = activity.get(chat["id"], {}).get(bot)
         if a is not None:
             a["text"] = ((a.get("text") or "") + text if append else text)[-20000:]
 
 
-def rel(path, folder):
-    if not path:
-        return ""
-    r = os.path.relpath(path, folder) if os.path.isabs(path) else path
-    return path if r.startswith("..") else r
-
-
-def add_file(out, path):
-    if path and path not in out["files"]:
-        out["files"].append(path)
-
-
-def describe_tool(name, inp, folder):
-    path = rel(inp.get("file_path") or inp.get("notebook_path") or inp.get("path"), folder)
-    if name == "Read":
-        return f"📖 reading {path}"
-    if name in EDIT_NAMES:
-        return f"✏️ editing {path}"
-    if name == "Bash":
-        return "$ " + (inp.get("description") or (inp.get("command") or "").strip().split("\n")[0])
-    if name in ("Grep", "Glob"):
-        return f"🔎 searching for {inp.get('pattern', '')}" + (f" in {path}" if path else "")
-    if name == "WebSearch":
-        return f"🌐 searching the web: {inp.get('query', '')}"
-    if name == "WebFetch":
-        return f"🌐 reading {inp.get('url', '')}"
-    if name == "Skill":
-        return f"🧩 using skill {inp.get('skill', '')}"
-    if name in ("Agent", "Task"):
-        return f"🤖 subagent: {inp.get('description', '')}"
-    if name == "TodoWrite":
-        return "📝 updating its to-do list"
-    return f"🔧 {name}"
-
-
-def first_line(text):
-    return "💬 " + next((l for l in text.strip().splitlines() if l.strip()), "")
-
-
-def run_claude(chat, prompt, ab):
-    """-> (reply text, meta). meta: secs, cost, tokens, files changed."""
-    sid = chat["sessions"]["claude"]
-    cmd = ["claude", "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
-           "--append-system-prompt", intro("claude", chat)]
-    if sid:
-        cmd += ["--resume", sid]
-    else:
-        sid = str(uuid.uuid4())
-        cmd += ["--session-id", sid]
-    if ab in ("auto", "auto-limited"):
-        cmd += ["--permission-mode", "auto"]
-    elif ab == "work":
-        cmd += ["--permission-mode", "acceptEdits", "--settings", CLAUDE_SANDBOX,
-                "--allowedTools", *WORK_TOOLS]
-    elif ab == "review-auto":  # reviewer: auto mode minus the file-editing tools
-        cmd += ["--permission-mode", "auto", "--disallowedTools", *EDIT_NAMES]
-    elif ab == "review-work":  # reviewer: sandboxed commands (tests, git diff), no edit tools
-        cmd += ["--permission-mode", "dontAsk", "--settings", CLAUDE_SANDBOX,
-                "--allowedTools", *READ_TOOLS, "Bash", "--disallowedTools", *EDIT_NAMES]
-    elif ab == "edit-only":
-        # acceptEdits auto-approves edits only inside the working folder; anything
-        # else would need a prompt, which -p can't show, so it is denied.
-        cmd += ["--permission-mode", "acceptEdits", "--allowedTools", *READ_TOOLS,
-                "--disallowedTools", "Bash"]
-    else:
-        cmd += ["--permission-mode", "dontAsk", "--allowedTools", *READ_TOOLS]
-    cmd += ["--", prompt]
-    out = {"files": [], "result": None, "started": False}
-
-    def on_event(ev):
-        t = ev.get("type")
-        if t == "system" and ev.get("subtype") == "init":
-            out["started"] = True
-        elif t == "stream_event":  # token-by-token text, for the live preview
-            e = ev.get("event") or {}
-            if e.get("type") == "content_block_start" and \
-                    (e.get("content_block") or {}).get("type") == "text":
-                set_text(chat, "claude", "")
-            elif e.get("type") == "content_block_delta" and \
-                    (e.get("delta") or {}).get("type") == "text_delta":
-                set_text(chat, "claude", e["delta"].get("text", ""), append=True)
-        elif t == "assistant":
-            for c in (ev.get("message") or {}).get("content") or []:
-                if c.get("type") == "tool_use":
-                    inp = c.get("input") or {}
-                    step(chat, "claude", describe_tool(c.get("name", ""), inp, chat["folder"]))
-                    if c.get("name") in EDIT_NAMES:
-                        add_file(out, rel(inp.get("file_path") or inp.get("notebook_path"),
-                                          chat["folder"]))
-                elif c.get("type") == "text" and (c.get("text") or "").strip():
-                    step(chat, "claude", first_line(c["text"]))
-        elif t == "result":
-            out["result"] = ev
-
-    code, err, why = stream(chat, "claude", cmd, on_event)
-    if out["started"]:  # the session exists now (even if stopped), so keep resuming it
+def run_agent(chat, bot, prompt, ab):
+    """Run one turn of `bot` through its adapter. -> (reply text, meta)."""
+    def save_session(sid):
         with lock:
-            chat["sessions"]["claude"] = sid
+            chat["sessions"][bot] = sid
             save(chat)
-    res = out["result"] or {}
-    u = res.get("usage") or {}
-    meta = {"files": out["files"], "cost": res.get("total_cost_usd"),
-            "tokens": [u.get("input_tokens", 0) + u.get("cache_creation_input_tokens", 0)
-                       + u.get("cache_read_input_tokens", 0), u.get("output_tokens", 0)]
-            if u else None}
-    if why:
-        return f"({why})", meta
-    text = (res.get("result") or "").strip()
-    if res and not res.get("is_error") and text:
-        return text, meta
-    return f"(error) {(text or err or f'exit code {code}')[-800:]}", meta
 
-
-def run_codex(chat, prompt, ab):
-    sid = chat["sessions"]["codex"]
-    sandbox = "workspace-write" if ab in ("work", "auto") else "read-only"
-    conf = ["-c", f'sandbox_mode="{sandbox}"']
-    if ab == "auto":
-        # Codex's "approve for me": when the sandbox blocks something (internet, a
-        # folder outside the project...), Codex asks for escalation and its
-        # automatic reviewer (guardian) approves or denies it, like Claude's auto mode.
-        conf += ["-c", 'approval_policy="on-request"', "-c", 'approvals_reviewer="auto_review"']
-    else:
-        conf += ["-c", 'approval_policy="never"']
-    out = {"files": [], "usage": None}
-
-    def on_event(ev):
-        t, it = ev.get("type"), ev.get("item") or {}
-        kind = it.get("type")
-        if t == "thread.started" and not sid:  # save right away so Stop keeps it resumable
-            with lock:
-                chat["sessions"]["codex"] = ev.get("thread_id")
-                save(chat)
-        elif t == "turn.completed":
-            out["usage"] = ev.get("usage")
-        elif t == "item.started" and kind == "command_execution":
-            cmd = it.get("command") or ""
-            m = re.fullmatch(r"/bin/(?:ba|z)?sh -lc (['\"])(.*)\1", cmd, re.S)
-            step(chat, "codex", "$ " + (m.group(2) if m else cmd).split("\n")[0])
-        elif t == "item.started" and kind == "reasoning":
-            step(chat, "codex", "💭 thinking")
-        elif t == "item.started" and kind == "web_search":
-            step(chat, "codex", f"🌐 searching the web: {it.get('query', '')}")
-        elif t == "item.started" and kind == "mcp_tool_call":
-            step(chat, "codex", f"🔧 {it.get('server', '')}.{it.get('tool', '')}")
-        elif t == "item.completed" and kind == "file_change":
-            for c in it.get("changes") or []:
-                p = rel(c.get("path"), chat["folder"])
-                add_file(out, p)
-                step(chat, "codex", f"✏️ editing {p}")
-        elif t == "item.completed" and kind == "agent_message" and (it.get("text") or "").strip():
-            step(chat, "codex", first_line(it["text"]))
-            set_text(chat, "codex", it["text"])
-
-    with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as tf:
-        outfile = tf.name
-    try:
-        if sid:
-            cmd = ["codex", "exec", "--skip-git-repo-check", "--json", *conf,
-                   "-o", outfile, "resume", sid, prompt]
-        else:
-            cmd = ["codex", "exec", "--skip-git-repo-check", "--json", *conf,
-                   "-C", chat["folder"], "-o", outfile, intro("codex", chat) + "\n\n" + prompt]
-        code, err, why = stream(chat, "codex", cmd, on_event)
-        with open(outfile) as f:
-            text = f.read().strip()
-    finally:
-        os.unlink(outfile)
-    u = out["usage"] or {}
-    meta = {"files": out["files"], "cost": None,
-            "tokens": [u.get("input_tokens", 0), u.get("output_tokens", 0)] if u else None}
-    if why:
-        return f"({why})", meta
-    return (text or f"(error) {(err or f'exit code {code}')[-800:]}"), meta
+    ctx = RunContext(
+        folder=chat["folder"], session=chat["sessions"].get(bot),
+        system_prompt=intro(bot, chat), save_session=save_session,
+        step=lambda text: step(chat, bot, text),
+        preview=lambda text, append=False: set_text(chat, bot, text, append),
+        stream=lambda cmd, on_event: stream(chat, bot, cmd, on_event))
+    return ADAPTERS[bot].run(ctx, prompt, ab)
 
 
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", ".mypy_cache",
@@ -727,14 +490,15 @@ def ask(chat, bot, extra="", readonly=False, role=None):
     sk = last_user.get("skill") if last_user else None
     if sk and bot not in sk["bots"]:
         sk = None
-    if sk and bot == "claude":
-        # Claude Code runs a skill when the prompt *starts* with /name (like the terminal)
+    syntax = ADAPTERS[bot].skill_syntax
+    if sk and syntax == "slash":
+        # e.g. Claude Code runs a skill when the prompt *starts* with /name (like the terminal)
         ctx = note + format_msgs([m for m in msgs if m is not last_user])
         prompt = f"/{sk['name']} {sk['args']}".strip()
         if ctx.strip():
             prompt += "\n\n(Group-chat messages since your last turn, for context:\n" + ctx + ")"
-    elif sk and bot == "codex":
-        # Codex runs a skill when the message mentions $name
+    elif sk and syntax == "dollar":
+        # e.g. Codex runs a skill when the message mentions $name
         shown = [dict(m, text=re.sub(r"/" + re.escape(sk["name"]) + r"\b", "$" + sk["name"],
                                      m["text"], count=1, flags=re.I))
                  if m is last_user else m for m in msgs]
@@ -751,8 +515,7 @@ def ask(chat, bot, extra="", readonly=False, role=None):
             "role": {"summary": "summarizing"}.get(role, "reviewing" if readonly else "")}
     meta = {}
     try:
-        reply, meta = (run_claude if bot == "claude" else run_codex)(
-            chat, prompt, review_ability(ab) if readonly else ab)
+        reply, meta = run_agent(chat, bot, prompt, review_ability(ab) if readonly else ab)
     except Exception as e:
         reply = f"(error) {e}"
     finally:
@@ -815,7 +578,8 @@ def addressed(text, bot):
 
 
 def other(bot):
-    return "codex" if bot == "claude" else "claude"
+    """The other agent (the chat has exactly two for now)."""
+    return next(b for b in BOTS if b != bot)
 
 
 def pending(chat):
@@ -863,7 +627,7 @@ def review(chat, lead):
         return
     files = (last.get("meta") or {}).get("files") or []
     ask(chat, other(lead), REVIEW_NOTE.format(
-        lead=lead.capitalize(), files=f" (files changed: {', '.join(files)})" if files else ""),
+        lead=display(lead), files=f" (files changed: {', '.join(files)})" if files else ""),
         readonly=True)
 
 
@@ -918,7 +682,7 @@ def worker(chat, first=None):
             if not targets:
                 return
             res = parallel(chat, targets, extras={led: LEAD_NOTE.format(
-                reviewer=other(led).capitalize())} if led else None)
+                reviewer=display(other(led)))} if led else None)
             if led in targets and res.get(led) not in (None, PASS):
                 review(chat, led)
             elif len(targets) == 2 and not sk:  # no auto back-and-forth during a skill
@@ -953,7 +717,7 @@ def retry(chat, idx):
     if meta.get("role") == "review":
         return review(chat, other(bot))
     is_lead = chat.get("lead") == bot
-    if ask(chat, bot, LEAD_NOTE.format(reviewer=other(bot).capitalize()) if is_lead else "") \
+    if ask(chat, bot, LEAD_NOTE.format(reviewer=display(other(bot))) if is_lead else "") \
             not in (None, PASS) and is_lead:
         review(chat, bot)
 
@@ -977,7 +741,7 @@ def compact(chat):
     with lock:
         old = chat["sessions"]
         chat.setdefault("old_sessions", []).append(old)
-        chat["sessions"] = {"claude": None, "codex": None}
+        chat["sessions"] = {b: None for b in BOTS}
         chat["told"] = {}
         idx = len(chat["messages"]) - 1  # the summary: both new sessions start from it
         for b in BOTS:
@@ -987,7 +751,7 @@ def compact(chat):
 
 
 def export_md(chat):
-    names = {"user": "You", "claude": "Claude", "codex": "Codex"}
+    names = {"user": "You", **{b: a.name for b, a in ADAPTERS.items()}}
     out = [f"# {chat['title']}", "",
            f"Folder: `{chat['folder']}` · mode: {chat['mode']} · exported "
            f"{time.strftime('%Y-%m-%d %H:%M')}", ""]
@@ -1002,7 +766,7 @@ def export_md(chat):
 
 
 # ---------------------------------------------------------------- http
-PAGE_FILE = os.path.join(HERE, "index.html")
+PAGE_FILE = os.path.join(HERE, "static", "index.html")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1146,7 +910,7 @@ class Handler(BaseHTTPRequestHandler):
             with lock:
                 if d.get("mode") in ("talk", "work", "auto"):
                     c["mode"] = d["mode"]
-                if d.get("lead") in ("", "claude", "codex"):
+                if d.get("lead") in ("", *BOTS):
                     c["lead"] = d["lead"] or None
                 if "rounds" in d:
                     c["rounds"] = max(0, min(5, int(d["rounds"])))
@@ -1165,9 +929,13 @@ class Handler(BaseHTTPRequestHandler):
         return self.send_json({"ok": True})
 
 
-if __name__ == "__main__":
+def main():
     print(f"Group chat on http://127.0.0.1:{PORT}  (data: {DATA_DIR})", flush=True)
     if not sys.stdout.isatty():  # started in the background: keep a log file instead
         sys.stdout = sys.stderr = open(LOG_FILE, "a", buffering=1)
     load_all()
     ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
+
+
+if __name__ == "__main__":
+    main()
