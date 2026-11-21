@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Never commit user data (it lives in ~/.agent-groupchat/, these are safety nets)
+chats/
+*.diffs/
+*.log
+.agent-groupchat/
+
+# Agent/sandbox artifacts
+.agents/
+.codex/
+.claude/settings.local.json
+
+# Secrets / editors / OS
+.env
+.env.*
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

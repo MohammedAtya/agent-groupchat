@@ -1,0 +1,643 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Group Chat</title>
+<style>
+  :root { --bg:#f6f6f4; --panel:#fff; --side:#efeee9; --text:#1d1d1b; --muted:#76746e;
+          --border:#e2e0da; --hover:#e6e4dd; --user:#2f6fde; --claude:#c96442; --codex:#10a37f;
+          --warn:#b7791f; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#161615; --panel:#20201e; --side:#1b1b1a; --text:#ecebe6; --muted:#9a988f;
+            --border:#33322e; --hover:#2a2a27; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); height:100vh; display:flex;
+         font:15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  button, input, select, textarea { font:inherit; color:inherit; }
+  /* sidebar */
+  aside { width:260px; background:var(--side); border-right:1px solid var(--border);
+          display:flex; flex-direction:column; flex-shrink:0; }
+  aside .top { padding:12px; }
+  .primary { width:100%; background:var(--user); color:#fff; border:0; border-radius:8px;
+             padding:9px; font-weight:600; cursor:pointer; }
+  #list { flex:1; overflow-y:auto; padding:0 8px 12px; }
+  .item { padding:8px 10px; border-radius:8px; cursor:pointer; margin-bottom:2px; }
+  .item:hover { background:var(--hover); }
+  .item.active { background:var(--panel); border:1px solid var(--border); }
+  .item .t { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:14px; }
+  .item .s { font-size:12px; color:var(--muted); white-space:nowrap; overflow:hidden;
+             text-overflow:ellipsis; }
+  .badge { font-size:11px; padding:1px 6px; border-radius:10px; border:1px solid var(--border); }
+  .badge.work { color:var(--warn); border-color:var(--warn); }
+  /* main */
+  main { flex:1; display:flex; flex-direction:column; min-width:0; }
+  header { padding:10px 16px; border-bottom:1px solid var(--border); background:var(--panel);
+           display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  header h1 { font-size:16px; margin:0; flex:1; min-width:120px; cursor:text;
+              white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  header .folder { font-size:12px; color:var(--muted); font-family:ui-monospace, monospace; }
+  .ctl { font-size:13px; color:var(--muted); display:flex; align-items:center; gap:6px; }
+  .ctl select, .small { background:var(--bg); border:1px solid var(--border); border-radius:6px;
+                        padding:3px 6px; font-size:13px; cursor:pointer; }
+  #log { flex:1; overflow-y:auto; padding:16px; }
+  .inner { max-width:860px; margin:0 auto; display:flex; flex-direction:column; gap:10px; }
+  .msg { max-width:82%; padding:8px 12px; border-radius:12px; background:var(--panel);
+         border:1px solid var(--border); white-space:pre-wrap; word-wrap:break-word; }
+  .msg .who { font-size:12px; font-weight:600; margin-bottom:2px; }
+  .msg.user { align-self:flex-end; background:var(--user); color:#fff; border-color:var(--user); }
+  .msg.user .who { color:#dbe6ff; }
+  .msg.claude { border-left:4px solid var(--claude); } .msg.claude .who { color:var(--claude); }
+  .msg.codex  { border-left:4px solid var(--codex); }  .msg.codex  .who { color:var(--codex); }
+  #typing { font-size:13px; color:var(--muted); padding:0 16px 6px; min-height:20px; }
+  #typing .act { max-width:860px; margin:0 auto 4px; padding:6px 10px; border:1px solid var(--border);
+                 border-radius:10px; background:var(--panel); display:flex; gap:10px; align-items:flex-start; }
+  #typing .act .body { flex:1; min-width:0; }
+  #typing .act .now { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--text); }
+  #typing .act .prev { font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; opacity:.75; }
+  #typing .act b { font-weight:600; }
+  #typing .stop { background:var(--bg); border:1px solid var(--border); border-radius:6px; padding:2px 10px;
+                  font-size:12px; cursor:pointer; color:#c33; }
+  #typing .preview { max-width:860px; margin:-2px auto 6px; padding:6px 12px; max-height:34vh; overflow-y:auto;
+                     border:1px dashed var(--border); border-radius:10px; color:var(--text); opacity:.85; font-size:14px; }
+  .msg .meta { font-size:11px; color:var(--muted); margin-top:4px; white-space:normal; }
+  .msg .meta code { font-size:11px; }
+  /* markdown in AI replies */
+  .md { white-space:normal; }
+  .md > :first-child { margin-top:0; } .md > :last-child { margin-bottom:0; }
+  .md p, .md ul, .md ol, .md blockquote, .md table, .md .code { margin:6px 0; }
+  .md ul, .md ol { padding-left:22px; } .md li { margin:2px 0; }
+  .md h1, .md h2, .md h3, .md h4 { font-size:15px; margin:10px 0 4px; }
+  .md h1, .md h2 { font-size:16px; }
+  .md code { font-family:ui-monospace, monospace; font-size:13px; background:var(--hover);
+             padding:1px 5px; border-radius:4px; }
+  .md .code { position:relative; }
+  .md pre { margin:0; padding:10px 12px; background:var(--bg); border:1px solid var(--border);
+            border-radius:8px; overflow-x:auto; white-space:pre; }
+  .md pre code { background:none; padding:0; font-size:12.5px; }
+  .md .copy { position:absolute; top:6px; right:6px; font-size:11px; padding:2px 8px; cursor:pointer;
+              border:1px solid var(--border); border-radius:6px; background:var(--panel); opacity:.8; }
+  .md .copy:hover { opacity:1; }
+  .md .lang { position:absolute; top:7px; right:62px; font-size:11px; color:var(--muted); }
+  .md blockquote { border-left:3px solid var(--border); padding-left:10px; color:var(--muted); }
+  .md table { border-collapse:collapse; display:block; overflow-x:auto; font-size:13px; }
+  .md th, .md td { border:1px solid var(--border); padding:4px 8px; text-align:left; vertical-align:top; }
+  .md th { background:var(--hover); }
+  .md hr { border:0; border-top:1px solid var(--border); margin:10px 0; }
+  .md a { color:var(--user); }
+  /* status under your messages, actions under replies */
+  .status { font-size:11px; color:#dbe6ff; margin-top:4px; white-space:normal; }
+  .status span { margin-right:8px; } .status .bad { color:#ffd2cf; font-weight:600; }
+  .acts { margin-top:5px; display:flex; gap:6px; flex-wrap:wrap; white-space:normal; }
+  .acts button { font-size:11px; padding:1px 8px; border-radius:6px; border:1px solid var(--border);
+                 background:var(--bg); color:var(--muted); cursor:pointer; }
+  .acts button:hover { color:var(--text); }
+  .acts button.retry { color:#c33; border-color:#e5a3a0; }
+  .msg.failed > .md { opacity:.75; } .msg.retried { opacity:.55; }
+  .diff { margin-top:6px; max-height:420px; overflow:auto; background:var(--bg); border:1px solid var(--border);
+          border-radius:8px; padding:8px 10px; font:12px/1.45 ui-monospace, monospace; white-space:pre; }
+  .diff .a { color:#1a7f37; background:rgba(46,160,67,.12); display:block; }
+  .diff .d { color:#cf222e; background:rgba(248,81,73,.12); display:block; }
+  .diff .h { color:var(--muted); display:block; }
+  @media (prefers-color-scheme: dark) { .diff .a { color:#56d364; } .diff .d { color:#ff7b72; } }
+  .msg.summary { align-self:stretch; max-width:100%; border:1px dashed var(--claude); }
+  .msg.summary .who { color:var(--claude); }
+  .md .path { font-family:ui-monospace, monospace; font-size:13px; border-bottom:1px dotted var(--muted); cursor:help; }
+  form#f { display:flex; gap:8px; padding:12px 16px; border-top:1px solid var(--border);
+           background:var(--panel); }
+  #t { flex:1; resize:none; padding:10px 12px; border-radius:10px; border:1px solid var(--border);
+       background:var(--bg); height:46px; }
+  form#f button { background:var(--user); color:#fff; border:0; border-radius:10px;
+                  padding:0 18px; font-weight:600; cursor:pointer; }
+  .empty { color:var(--muted); text-align:center; margin-top:18vh; }
+  /* slash menu */
+  #composer { position:relative; }
+  #menu { position:absolute; left:16px; right:16px; bottom:100%; margin-bottom:4px; max-height:320px;
+          overflow-y:auto; background:var(--panel); border:1px solid var(--border); border-radius:10px;
+          box-shadow:0 8px 24px rgba(0,0,0,.15); z-index:5; }
+  #menu .opt { padding:7px 12px; cursor:pointer; display:flex; gap:10px; align-items:baseline; }
+  #menu .opt.sel, #menu .opt:hover { background:var(--hover); }
+  #menu .nm { font-family:ui-monospace, monospace; font-weight:600; white-space:nowrap; }
+  #menu .hint { font-family:ui-monospace, monospace; font-size:12px; color:var(--muted); white-space:nowrap; }
+  #menu .ds { font-size:12px; color:var(--muted); flex:1; min-width:0; white-space:nowrap;
+              overflow:hidden; text-overflow:ellipsis; }
+  #menu .who2 { font-size:11px; white-space:nowrap; }
+  #menu .who2 b { padding:0 5px; border-radius:8px; color:#fff; font-weight:600; margin-left:3px; }
+  #menu .head { padding:6px 12px; font-size:11px; color:var(--muted); border-bottom:1px solid var(--border); }
+  .resume { font-size:12px; color:var(--muted); text-align:center; font-family:ui-monospace, monospace; }
+  /* dialog */
+  dialog { border:1px solid var(--border); border-radius:12px; background:var(--panel);
+           color:var(--text); width:min(460px, calc(100vw - 32px)); padding:20px; }
+  dialog::backdrop { background:rgba(0,0,0,.4); }
+  dialog h2 { margin:0 0 14px; font-size:17px; }
+  dialog label { display:block; font-size:13px; color:var(--muted); margin:12px 0 4px; }
+  dialog input, dialog select { width:100%; padding:8px 10px; border-radius:8px;
+                                border:1px solid var(--border); background:var(--bg); }
+  dialog .hint { font-size:12px; color:var(--muted); margin-top:4px; }
+  dialog .row { display:flex; gap:8px; justify-content:flex-end; margin-top:18px; }
+  dialog .row button { padding:8px 14px; border-radius:8px; border:1px solid var(--border);
+                       background:var(--bg); cursor:pointer; }
+  dialog .row button.go { background:var(--user); color:#fff; border:0; }
+  #err { color:#d33; font-size:13px; margin-top:8px; }
+  @media (max-width:700px) { aside { width:200px; } }
+</style>
+</head>
+<body>
+<aside>
+  <div class="top"><button class="primary" id="newBtn">+ New chat</button></div>
+  <div id="list"></div>
+</aside>
+<main>
+  <header id="hdr" hidden>
+    <div style="flex:1;min-width:0">
+      <h1 id="title" title="Click to rename"></h1>
+      <div class="folder" id="folder"></div>
+    </div>
+    <span class="ctl">Mode
+      <select id="mode"><option value="talk">Talk only</option><option value="work">Can work</option><option value="auto">Auto</option></select>
+    </span>
+    <span class="ctl">Discussion
+      <select id="rounds"><option value="0">Off</option><option value="1">1 round</option>
+        <option value="2">2 rounds</option><option value="3">3 rounds</option></select>
+    </span>
+    <span class="ctl" title="Lead + Review: the lead does the work, then the other AI reviews it (read-only). @mention to ask either one directly.">Lead
+      <select id="lead"><option value="">Off</option><option value="claude">Claude works, Codex reviews</option>
+        <option value="codex">Codex works, Claude reviews</option></select>
+    </span>
+    <button class="small" id="compact" title="Summarize this chat and continue in fresh sessions from the summary (cheaper replies)">Compact</button>
+    <button class="small" id="export" title="Download this chat as Markdown">Export</button>
+    <button class="small" id="del">Delete</button>
+  </header>
+  <div id="down" hidden style="background:#fde2e1;color:#8a1c17;padding:8px 16px;font-size:13px;border-bottom:1px solid #f3b8b5">
+    ⚠ The chat server isn't running. Start it with <code>python3 server.py</code> in the project folder, and this page reconnects by itself.
+  </div>
+  <div id="warn" hidden style="background:#fdf3e1;color:#7a4b00;padding:8px 16px;font-size:13px;border-bottom:1px solid #f0d9a8">
+    ⚠ Sandbox unavailable: Codex stays read-only, and in "Can work" Claude can edit files but can't run commands. (Auto mode still lets Claude do everything.)
+    To fix it, run the one-time sandbox setup from the README.
+  </div>
+  <div id="log"><div class="inner" id="inner"><div class="empty">Pick a chat on the left, or start a new one.</div></div></div>
+  <div id="typing"></div>
+  <div id="composer">
+  <div id="menu" hidden></div>
+  <div id="to" style="font-size:12px;color:var(--muted);padding:0 16px 4px"></div>
+  <form id="f" hidden>
+    <textarea id="t" placeholder="Message the group… (@claude / @codex to ask one, / for skills)"></textarea>
+    <button>Send</button>
+  </form>
+  </div>
+</main>
+
+<dialog id="dlg">
+  <form method="dialog" id="newForm">
+    <h2>New group chat</h2>
+    <label for="nTitle">Name (optional)</label>
+    <input id="nTitle" placeholder="Named after your first message if empty">
+    <label for="nFolder">Project folder</label>
+    <input id="nFolder">
+    <div class="hint">Claude and Codex work here and load this folder's CLAUDE.md / AGENTS.md and project skills.</div>
+    <label for="nMode">Mode</label>
+    <select id="nMode">
+      <option value="talk">Talk only: read files and use skills, no changes</option>
+      <option value="work">Can work: edit files and run commands, sandboxed to the folder</option>
+      <option value="auto">Auto: both work like auto mode in the terminal, with safety review</option>
+    </select>
+    <label for="nRounds">Let Claude and Codex reply to each other</label>
+    <select id="nRounds"><option value="0">Off</option><option value="1" selected>1 round</option>
+      <option value="2">2 rounds</option><option value="3">3 rounds</option></select>
+    <div id="err"></div>
+    <div class="row">
+      <button value="cancel" formnovalidate>Cancel</button>
+      <button class="go" id="create" value="default">Create</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+const $ = id => document.getElementById(id);
+const names = {user:'You', claude:'Claude', codex:'Codex'};
+let current = null, lastSig = '', home = '', lead = '', lastScrolled = false, stopping = false;
+
+const TOKEN = '__GC_TOKEN__';  // filled in by server.py; changes on every server launch
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? {} :
+    {method:'POST', body:JSON.stringify(body),
+     headers:{'Content-Type':'application/json', 'X-Groupchat-Token':TOKEN}});
+  // 403 = the server restarted with a new token: reload once to pick it up
+  if (r.status === 403 && body !== undefined && !sessionStorage.getItem('gc-reloaded')) {
+    sessionStorage.setItem('gc-reloaded', '1'); location.reload();
+  } else if (r.ok) sessionStorage.removeItem('gc-reloaded');
+  return r.json();
+}
+
+function ago(ts) {
+  const s = Date.now()/1000 - ts;
+  if (s < 60) return 'just now';
+  if (s < 3600) return Math.floor(s/60) + 'm ago';
+  if (s < 86400) return Math.floor(s/3600) + 'h ago';
+  return new Date(ts*1000).toLocaleDateString();
+}
+
+async function loadList() {
+  let d;
+  try { d = await api('/api/chats'); $('down').hidden = true; }
+  catch (e) { $('down').hidden = false; return []; }
+  home = d.home;
+  $('warn').hidden = d.sandbox || !current || $('mode').value === 'talk';
+  const list = $('list'); list.innerHTML = '';
+  for (const c of d.chats) {
+    const el = document.createElement('div');
+    el.className = 'item' + (c.id === current ? ' active' : '');
+    const t = document.createElement('div'); t.className = 't'; t.textContent = c.title;
+    const s = document.createElement('div'); s.className = 's';
+    s.innerHTML = `<span class="badge ${c.mode === 'talk' ? '' : 'work'}">${c.mode}</span> `;
+    s.append(ago(c.updated) + ' · ' + c.folder.replace(home, '~'));
+    el.append(t, s);
+    el.onclick = () => openChat(c.id);
+    list.append(el);
+  }
+  return d.chats;
+}
+
+async function openChat(id) {
+  current = id; lastSig = ''; lastScrolled = false; openDiffs = new Set();
+  for (const k in diffCache) delete diffCache[k];
+  try { localStorage.setItem('gc-last', id); } catch (e) {}
+  $('hdr').hidden = false; $('f').hidden = false;
+  skills = []; skillsFor = null; loadSkills();
+  await refresh(); loadList(); $('t').focus();
+}
+
+async function refresh() {
+  if (!current) return;
+  let c;
+  try { c = await api('/api/chats/' + current); }
+  catch (e) { $('typing').textContent = 'Server not reachable…'; return; }
+  if (c.error) { current = null; return; }
+  $('title').textContent = c.title;
+  $('folder').textContent = c.folder;
+  $('mode').value = c.mode; $('rounds').value = String(c.rounds); $('lead').value = c.lead || '';
+  lead = c.lead || '';
+  const sig = c.messages.length + '|' + (c.sessions.claude||'') + (c.sessions.codex||'') + '|' +
+    JSON.stringify(c.messages.map(m => [m.status, m.retried]));
+  if (sig !== lastSig) {
+    lastSig = sig;
+    const log = $('log'), stick = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
+    const inner = $('inner'); inner.innerHTML = '';
+    if (!c.messages.length)
+      inner.innerHTML = '<div class="empty">Say hi to Claude and Codex 👋</div>';
+    c.messages.forEach((m, idx) => {
+      if (m.hidden || m.who === 'system') return;
+      const meta = m.meta || {}, summary = meta.role === 'summary';
+      const failed = m.who !== 'user' && /^\((error|stopped|timed out)/.test(m.text);
+      const d = document.createElement('div');
+      d.className = 'msg ' + m.who + (summary ? ' summary' : '') + (failed ? ' failed' : '') + (m.retried ? ' retried' : '');
+      const w = document.createElement('div'); w.className = 'who';
+      w.textContent = summary ? '📋 Chat summary (by Claude): fresh sessions continue from here'
+        : (names[m.who] || m.who) + (meta.role === 'review' ? ' · review' : '') + (m.retried ? ' · retried' : '');
+      const b = document.createElement('div');
+      if (m.who === 'user') b.textContent = m.text;          // your messages stay plain text
+      else { b.className = 'md'; b.innerHTML = md(m.text); } // AI replies: Markdown
+      d.append(w, b);
+      if (m.who === 'user' && m.status) d.append(statusLine(m.status));
+      const info = metaLine(meta);
+      if (info) { const x = document.createElement('div'); x.className = 'meta'; x.textContent = info; d.append(x); }
+      if (m.who !== 'user') d.append(actions(m, idx, failed));
+      if (openDiffs.has(idx)) showDiff(d, idx);
+      inner.append(d);
+    });
+    if (c.sessions.claude || c.sessions.codex) {
+      const r = document.createElement('div'); r.className = 'resume';
+      r.textContent = 'Continue in a terminal (cd ' + c.folder.replace(home, '~') + '):  ' +
+        [c.sessions.claude && 'claude -r ' + c.sessions.claude,
+         c.sessions.codex && 'codex resume ' + c.sessions.codex].filter(Boolean).join('   ·   ');
+      inner.append(r);
+    }
+    if (stick || !lastScrolled) log.scrollTop = log.scrollHeight;  // don't yank you away from older messages
+    lastScrolled = true;
+  }
+  showActivity(c.activity || {});
+}
+
+// ---- Markdown for AI replies. Everything is HTML-escaped first; only the markup below
+// becomes tags, and only http(s) links become clickable (local paths get a tooltip).
+function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+function inline(raw) {
+  const spans = [];
+  let s = esc(raw).replace(/`([^`\n]+)`/g, (m, c) => { spans.push(c); return `\u0001${spans.length - 1}\u0001`; });
+  s = s.replace(/\[([^\]\n]+)\]\(([^)\s]+)\)/g, (m, t, u) => /^https?:\/\//i.test(u)
+      ? `<a href="${u}" target="_blank" rel="noopener noreferrer">${t}</a>`
+      : `<span class="path" title="${u}">${t}</span>`)
+    .replace(/(^|[\s(])(https?:\/\/[^\s<)]+[^\s<).,;:!?'])/g, '$1<a href="$2" target="_blank" rel="noopener noreferrer">$2</a>')
+    .replace(/\*\*(?=\S)([^*]+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[^\w*])\*(?=\S)([^*\n]+?)\*(?![\w*])/g, '$1<em>$2</em>')
+    .replace(/(^|[^\w])_(?=\S)([^_\n]+?)_(?!\w)/g, '$1<em>$2</em>')
+    .replace(/~~(?=\S)([^~]+?)~~/g, '<del>$1</del>');
+  return s.replace(/\u0001(\d+)\u0001/g, (m, k) => `<code>${spans[k]}</code>`);
+}
+const LIST_RE = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/, SEP_RE = /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$/;
+const cells = l => l.trim().replace(/^\||\|$/g, '').split('|').map(c => inline(c.trim()));
+function blockStart(l, next) {
+  return /^\u0000B\d+\u0000$/.test(l) || /^#{1,6}\s/.test(l) || /^>/.test(l) || LIST_RE.test(l) ||
+         /^\s*([-*_])(\s*\1){2,}\s*$/.test(l) || (l.includes('|') && SEP_RE.test(next || ''));
+}
+function md(src) {
+  const codes = [];
+  src = src.replace(/\r/g, '').replace(/^ {0,3}```([\w+.#-]*)[^\n]*\n([\s\S]*?)^ {0,3}```[ \t]*$/gm, (m, lang, code) => {
+    codes.push({lang, code: code.replace(/\n$/, '')}); return `\u0000B${codes.length - 1}\u0000`; });
+  const L = src.split('\n'), out = [];
+  for (let i = 0; i < L.length;) {
+    const l = L[i];
+    let m;
+    if (!l.trim()) { i++; continue; }
+    if ((m = l.match(/^\u0000B(\d+)\u0000$/))) {
+      const c = codes[+m[1]];
+      out.push(`<div class="code">${c.lang ? `<span class="lang">${esc(c.lang)}</span>` : ''}<button class="copy" type="button">Copy</button><pre><code>${esc(c.code)}</code></pre></div>`);
+      i++;
+    } else if ((m = l.match(/^(#{1,6})\s+(.*)$/))) {
+      const n = Math.min(m[1].length, 4); out.push(`<h${n}>${inline(m[2])}</h${n}>`); i++;
+    } else if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(l)) { out.push('<hr>'); i++; }
+    else if (/^>/.test(l)) {
+      const q = []; while (i < L.length && /^>/.test(L[i])) q.push(L[i++].replace(/^>\s?/, ''));
+      out.push(`<blockquote>${md(q.join('\n'))}</blockquote>`);
+    } else if (l.includes('|') && SEP_RE.test(L[i + 1] || '')) {
+      const head = cells(l); i += 2; const rows = [];
+      while (i < L.length && L[i].includes('|') && L[i].trim()) rows.push(cells(L[i++]));
+      out.push(`<table><thead><tr>${head.map(c => `<th>${c}</th>`).join('')}</tr></thead><tbody>` +
+               rows.map(r => `<tr>${r.map(c => `<td>${c}</td>`).join('')}</tr>`).join('') + '</tbody></table>');
+    } else if (LIST_RE.test(l)) {
+      // nested lists by indentation, with a stack of open <ul>/<ol>
+      const stack = []; let html = '';
+      while (i < L.length && (LIST_RE.test(L[i]) || (L[i].trim() && /^\s{2,}/.test(L[i]) && stack.length))) {
+        const lm = L[i].match(LIST_RE);
+        if (!lm) { html += '<br>' + inline(L[i++].trim()); continue; }  // continuation line
+        const ind = lm[1].replace(/\t/g, '    ').length, tag = /\d/.test(lm[2]) ? 'ol' : 'ul';
+        while (stack.length && ind < stack[stack.length - 1].ind) html += `</li></${stack.pop().tag}>`;
+        const top = stack[stack.length - 1];
+        if (!top || ind > top.ind) {
+          const start = tag === 'ol' && parseInt(lm[2]) !== 1 ? ` start="${parseInt(lm[2])}"` : '';
+          html += `<${tag}${start}>`; stack.push({ind, tag});
+        } else html += '</li>';
+        html += '<li>' + inline(lm[3]); i++;
+      }
+      while (stack.length) html += `</li></${stack.pop().tag}>`;
+      out.push(html);
+    } else {
+      const p = [];
+      while (i < L.length && L[i].trim() && !(p.length && blockStart(L[i], L[i + 1]))) p.push(inline(L[i++]));
+      out.push(`<p>${p.join('<br>')}</p>`);
+    }
+  }
+  return out.join('');
+}
+$('inner').addEventListener('click', async e => {
+  const btn = e.target.closest('.copy'); if (!btn) return;
+  const text = btn.parentElement.querySelector('code').textContent;
+  try { await navigator.clipboard.writeText(text); }
+  catch (err) {  // older browsers / no clipboard permission
+    const t = document.createElement('textarea'); t.value = text; document.body.append(t); t.select();
+    document.execCommand('copy'); t.remove();
+  }
+  btn.textContent = 'Copied'; setTimeout(() => { btn.textContent = 'Copy'; }, 1200);
+});
+
+function dur(s) { s = Math.max(0, Math.round(s)); return s < 60 ? s + 's' : Math.floor(s/60) + 'm' + String(s%60).padStart(2,'0') + 's'; }
+function kfmt(n) { return n >= 1000 ? (n/1000).toFixed(n >= 10000 ? 0 : 1) + 'k' : String(n); }
+const ST = {queued: '⏳ queued', running: '● working…', done: '✓', passed: '– had nothing to add',
+            error: '✗ error', stopped: '■ stopped', 'timed out': '⏱ timed out', skipped: '– skipped'};
+function statusLine(status) {
+  const x = document.createElement('div'); x.className = 'status';
+  for (const [b, st] of Object.entries(status)) {
+    const sp = document.createElement('span');
+    if (['error', 'timed out'].includes(st)) sp.className = 'bad';
+    sp.textContent = `${names[b]} ${ST[st] || st}`; x.append(sp);
+  }
+  return x;
+}
+let openDiffs = new Set(); const diffCache = {};
+function actions(m, idx, failed) {
+  const x = document.createElement('div'); x.className = 'acts';
+  const btn = (label, title, fn, cls) => {
+    const bt = document.createElement('button'); bt.type = 'button'; bt.textContent = label; bt.title = title;
+    if (cls) bt.className = cls; bt.onclick = fn; x.append(bt);
+  };
+  btn('↩ Reply', `Write to ${names[m.who]} only`, () => {
+    const t = $('t'); t.value = `@${m.who} ` + t.value.replace(/^@(claude|codex)\s*/i, ''); t.focus(); updateTo(); });
+  if (failed && !m.retried)
+    btn('↻ Retry', `Ask ${names[m.who]} again`, async () => {
+      const r = await api(`/api/chats/${current}/retry`, {index: idx});
+      if (r.error) alert(r.error); else refresh(); }, 'retry');
+  const df = (m.meta || {}).diff;
+  if (df) btn(openDiffs.has(idx) ? '▾ Hide diff' : `▸ Diff (+${df[0]} −${df[1]})`, 'What this reply changed in the files', e => {
+    if (openDiffs.has(idx)) openDiffs.delete(idx); else openDiffs.add(idx);
+    lastSig = ''; refresh(); });
+  return x;
+}
+async function showDiff(d, idx) {
+  const box = document.createElement('div'); box.className = 'diff'; box.textContent = 'Loading…'; d.append(box);
+  if (!(idx in diffCache)) {
+    try { const r = await fetch(`/api/chats/${current}/diff/${idx}`); diffCache[idx] = r.ok ? await r.text() : '(diff not available)'; }
+    catch (e) { box.textContent = '(could not load the diff)'; return; }
+  }
+  box.textContent = '';
+  for (const line of diffCache[idx].split('\n')) {
+    const sp = document.createElement('span');
+    sp.className = /^(\+\+\+|---)/.test(line) || line.startsWith('@@') ? 'h' : line[0] === '+' ? 'a' : line[0] === '-' ? 'd' : '';
+    sp.textContent = line + '\n'; box.append(sp);
+  }
+}
+function metaLine(m) {
+  const parts = [];
+  if (m.secs != null) parts.push(dur(m.secs));
+  if (m.cost) parts.push('≈$' + m.cost.toFixed(m.cost < 0.1 ? 3 : 2));
+  if (m.tokens) parts.push(kfmt(m.tokens[0]) + ' in / ' + kfmt(m.tokens[1]) + ' out');
+  if (m.files && m.files.length) parts.push('✏️ ' + m.files.join(', '));
+  if (m.warn) parts.push('⚠ ' + m.warn);
+  return parts.join(' · ');
+}
+function showActivity(act) {
+  const box = $('typing'), bots = Object.keys(act);
+  if (!bots.length) { box.innerHTML = ''; stopping = false; return; }
+  box.innerHTML = '';
+  bots.forEach((b, i) => {
+    const a = act[b], row = document.createElement('div'); row.className = 'act';
+    row.style.borderLeft = `4px solid var(--${b})`;
+    const body = document.createElement('div'); body.className = 'body';
+    const now = document.createElement('div'); now.className = 'now';
+    const steps = a.steps || [];
+    now.innerHTML = `<b style="color:var(--${b})">${names[b]}</b> `;
+    now.append(`${a.role ? a.role + ' · ' : ''}${dur(Date.now()/1000 - a.since)} · ${steps.length ? steps[steps.length-1] : 'thinking…'}`);
+    body.append(now);
+    for (const s of steps.slice(-3, -1).reverse()) {
+      const p = document.createElement('div'); p.className = 'prev'; p.textContent = s; body.append(p);
+    }
+    row.append(body);
+    if (i === 0) {  // re-rendered every second, so act on press, not on click
+      const st = document.createElement('button'); st.className = 'stop';
+      st.textContent = stopping ? 'Stopping…' : '■ Stop'; st.disabled = stopping;
+      st.title = 'Stop the running replies (and the rest of this turn)';
+      st.onpointerdown = () => { stopping = true; st.disabled = true; st.textContent = 'Stopping…';
+                                 api(`/api/chats/${current}/stop`, {}); };
+      row.append(st);
+    }
+    box.append(row);
+    if (a.text && a.text.trim()) {  // the reply as it's being written
+      const pv = document.createElement('div'); pv.className = 'preview md';
+      pv.innerHTML = md(a.text); box.append(pv); pv.scrollTop = pv.scrollHeight;
+    }
+  });
+}
+
+$('f').onsubmit = async e => {
+  e.preventDefault();
+  const text = $('t').value.trim(); if (!text || !current) return;
+  $('t').value = ''; updateTo();
+  await api(`/api/chats/${current}/send`, {text});
+  refresh(); loadList();
+};
+function mentioned(text) {
+  const found = new Set([...text.matchAll(/(?<![\w@])@(claude|codex)\b/gi)].map(m => m[1].toLowerCase()));
+  return ['claude', 'codex'].filter(b => found.has(b));
+}
+// ---- skills + slash menu
+let skills = [], skillsFor = null, menuItems = [], menuSel = 0;
+const SLASH_RE = /^\s*(?:@(?:claude|codex)\b[\s,:]*)*\/([\w:.-]*)$/i;   // text before the caret
+const SKILL_RE = /^\s*(?:@(?:claude|codex)\b[\s,:]*)*\/([\w:.-]+)/i;    // whole message
+
+async function loadSkills() {
+  if (!current) return;
+  try { skills = (await api(`/api/chats/${current}/skills`)).skills || []; skillsFor = current; }
+  catch (e) {}
+}
+function skillOf(text) {
+  const m = text.match(SKILL_RE);
+  return m && skills.find(s => s.name.toLowerCase() === m[1].toLowerCase());
+}
+const tag = b => `<b style="background:var(--${b})">${names[b]}</b>`;
+
+function updateTo() {
+  const text = $('t').value, m = mentioned(text), sk = skillOf(text);
+  const who = m.length ? m : sk ? sk.bots : lead ? [lead] : ['claude', 'codex'];
+  const list = who.map(b => `<b style="color:var(--${b})">${names[b]}</b>`).join(' and ');
+  const rev = lead === 'claude' ? 'codex' : 'claude';
+  $('to').innerHTML = !text.trim() ? '' :
+    (sk ? `→ runs <b>/${sk.name}</b> on ${list}` :
+     lead && !m.length ? `→ ${list} works on it, then <b style="color:var(--${rev})">${names[rev]}</b> reviews (read-only)` :
+     `→ ${who.length === 1 ? 'only ' : ''}${list} will reply`) +
+    (sk && m.some(b => !sk.bots.includes(b)) ? ` <span style="color:var(--warn)">(${m.filter(b => !sk.bots.includes(b)).map(b => names[b]).join(', ')} doesn't have this skill)</span>` : '');
+}
+
+function updateMenu() {
+  const t = $('t'), before = t.value.slice(0, t.selectionStart), m = before.match(SLASH_RE);
+  if (!m || skillsFor !== current) { $('menu').hidden = true; menuItems = []; return; }
+  const q = m[1].toLowerCase();
+  menuItems = skills.filter(s => s.name.toLowerCase().includes(q))
+    .sort((a, b) => (b.name.toLowerCase().startsWith(q)) - (a.name.toLowerCase().startsWith(q)));
+  if (!menuItems.length) { $('menu').hidden = true; return; }
+  menuSel = Math.min(menuSel, menuItems.length - 1);
+  const menu = $('menu'); menu.innerHTML = '';
+  const head = document.createElement('div'); head.className = 'head';
+  head.textContent = `${menuItems.length} skill${menuItems.length > 1 ? 's' : ''} · ↑↓ to pick · Enter/Tab to use · Esc to close`;
+  menu.append(head);
+  menuItems.forEach((s, i) => {
+    const o = document.createElement('div'); o.className = 'opt' + (i === menuSel ? ' sel' : '');
+    const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = '/' + s.name;
+    const hi = document.createElement('span'); hi.className = 'hint'; hi.textContent = s.hint;
+    const ds = document.createElement('span'); ds.className = 'ds'; ds.textContent = s.description; ds.title = s.description;
+    const w = document.createElement('span'); w.className = 'who2'; w.innerHTML = s.bots.map(tag).join('');
+    o.append(nm, hi, ds, w);
+    o.onmousedown = e => { e.preventDefault(); pick(i); };
+    menu.append(o);
+  });
+  menu.hidden = false;
+  menu.children[menuSel + 1]?.scrollIntoView({block: 'nearest'});
+}
+
+function pick(i) {
+  const t = $('t'), s = menuItems[i], pos = t.selectionStart;
+  const before = t.value.slice(0, pos).replace(/\/[\w:.-]*$/, '/' + s.name + ' ');
+  t.value = before + t.value.slice(pos).replace(/^[\w:.-]*\s?/, '');
+  t.selectionStart = t.selectionEnd = before.length;
+  $('menu').hidden = true; menuItems = []; t.focus(); updateTo();
+}
+
+$('t').addEventListener('input', () => { menuSel = 0; updateMenu(); updateTo(); });
+$('t').addEventListener('click', updateMenu);
+$('t').addEventListener('blur', () => setTimeout(() => { $('menu').hidden = true; }, 150));
+$('t').addEventListener('keydown', e => {
+  if (!$('menu').hidden && menuItems.length) {
+    if (['ArrowDown', 'ArrowUp', 'Enter', 'Tab', 'Escape'].includes(e.key)) e.stopImmediatePropagation();
+    if (e.key === 'ArrowDown') { e.preventDefault(); menuSel = (menuSel + 1) % menuItems.length; return updateMenu(); }
+    if (e.key === 'ArrowUp') { e.preventDefault(); menuSel = (menuSel - 1 + menuItems.length) % menuItems.length; return updateMenu(); }
+    if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); return pick(menuSel); }
+    if (e.key === 'Escape') { e.preventDefault(); $('menu').hidden = true; return; }
+  }
+});
+$('t').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('f').requestSubmit(); }
+});
+$('mode').onchange = async () => {
+  const asks = {
+    work: 'Let Claude and Codex edit files and run commands in this folder without asking?',
+    auto: 'Auto mode: Claude and Codex can run commands, use the internet and edit files where ' +
+          'you ask, without asking you. Their automatic safety reviewers approve normal actions ' +
+          'and block risky ones, like auto mode in the terminal. Continue?'};
+  if (asks[$('mode').value] && !confirm(asks[$('mode').value])) {
+    $('mode').value = 'talk'; return;
+  }
+  await api(`/api/chats/${current}/settings`, {mode: $('mode').value}); refresh(); loadList();
+};
+$('lead').onchange = async () => {
+  await api(`/api/chats/${current}/settings`, {lead: $('lead').value}); lead = $('lead').value; updateTo();
+};
+$('compact').onclick = async () => {
+  if (!confirm('Compact: Claude summarizes this chat, then Claude and Codex continue in fresh sessions ' +
+               'that start from the summary, so later replies are faster and cheaper. The messages stay ' +
+               'on the page and the old sessions stay resumable from the terminal. Continue?')) return;
+  const r = await api(`/api/chats/${current}/compact`, {});
+  if (r.error) alert(r.error); else refresh();
+};
+$('export').onclick = () => { if (current) location.href = `/api/chats/${current}/export`; };
+$('rounds').onchange = () => api(`/api/chats/${current}/settings`, {rounds: +$('rounds').value});
+$('title').onclick = async () => {
+  const t = prompt('Rename chat', $('title').textContent);
+  if (t && t.trim()) { await api(`/api/chats/${current}/settings`, {title: t}); refresh(); loadList(); }
+};
+$('del').onclick = async () => {
+  if (!confirm('Delete this chat from the list? (The Claude/Codex sessions stay in their own history.)')) return;
+  await api(`/api/chats/${current}/delete`, {});
+  current = null; $('hdr').hidden = true; $('f').hidden = true;
+  $('inner').innerHTML = '<div class="empty">Chat deleted.</div>';
+  loadList();
+};
+
+$('newBtn').onclick = () => {
+  $('nTitle').value = ''; $('nFolder').value = home || '~'; $('err').textContent = '';
+  $('dlg').showModal(); $('nFolder').focus();
+};
+$('create').onclick = async e => {
+  e.preventDefault();
+  let r;
+  try {
+    r = await api('/api/chats', {title: $('nTitle').value, folder: $('nFolder').value,
+                                 mode: $('nMode').value, rounds: +$('nRounds').value});
+  } catch (err) {
+    $('err').textContent = "The chat server isn't running. Start it with `python3 server.py` in the project folder, then try again.";
+    return;
+  }
+  if (r.error) { $('err').textContent = r.error; return; }
+  $('dlg').close(); openChat(r.id);
+};
+
+(async () => {
+  const list = await loadList();
+  let last = null; try { last = localStorage.getItem('gc-last'); } catch (e) {}
+  const pick = list.find(c => c.id === last) || list[0];
+  if (pick) openChat(pick.id);
+})();
+setInterval(() => { refresh(); }, 1000);
+setInterval(() => { loadList(); }, 5000);
+setInterval(() => { loadSkills(); }, 60000);
+</script>
+</body>
+</html>
