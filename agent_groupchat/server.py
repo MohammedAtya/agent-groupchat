@@ -598,7 +598,7 @@ def has_flow(chat):
 def route(chat, m):
     """Who answers a user message directly: (agents, flow). flow=True means a plain message
     in a chat with roles: the participants answer it directly and the workflow does the rest."""
-    if m.get("mode") in ("race", "split"):  # handled by step_race
+    if m.get("mode") in ("race", "split", "split-feedback"):  # handled by step_race
         return [], False
     ids = agent_ids(chat)
     sk, at = m.get("skill"), mentioned(chat, m["text"])
@@ -1210,7 +1210,7 @@ SUMMARY_FOR_RACE = ("\n\n(Write a summary of this group chat for agents who will
                     "sessions: the goal, decisions, what was done (files), open questions. Markdown "
                     "bullets, at most ~300 words. Reply with the summary only.)")
 PICK_RE = re.compile(r"PICK:\s*@?([\w-]+)", re.I)
-RACE_VERB = {"race": "racing", "test": "testing", "combine": "combining"}
+RACE_VERB = {"race": "racing", "part": "building", "test": "testing", "combine": "combining"}
 
 
 def worktree_dir(chat, name):
@@ -1240,8 +1240,9 @@ def race_view(chat):
     r = chat.get("race")
     if not r:
         return None
-    keep = ("agent", "name", "status", "files", "diff", "tests", "test_warn", "msg", "from")
-    return {"stage": r["stage"], "msg": r["msg"], "pick": r.get("pick"), "used": r.get("used"),
+    keep = ("agent", "name", "status", "files", "diff", "tests", "test_warn", "msg", "from", "part")
+    return {"kind": r.get("kind", "race"), "parts": r.get("parts"), "fix": r.get("fix", 0),
+            "stage": r["stage"], "msg": r["msg"], "pick": r.get("pick"), "used": r.get("used"),
             "copies": {n: {k: c[k] for k in keep if k in c} for n, c in r["copies"].items()}}
 
 
@@ -1447,11 +1448,13 @@ def race_combine(chat, r):
 def step_race(chat):
     """Run the next stage of the Race. -> True if it did something (call again)."""
     r = chat.get("race")
-    if not r or r["stage"] in ("done", "stopped"):
+    if not r or r["stage"] in ("done", "stopped", "await"):
         return False
     stage = r["stage"]
     try:
-        if stage == "work":
+        if r.get("kind") == "split":
+            step_split(chat, r)
+        elif stage == "work":
             race_work(chat, r)
             r["stage"] = "test"
         elif stage == "test":
@@ -1466,7 +1469,8 @@ def step_race(chat):
     except (copies.GitError, OSError) as e:
         add_msg(chat, "system", f"⚡ The Race stopped: {e}")
         r["stage"] = "stopped"
-    if chat["id"] in halted and r["stage"] != "done":
+    r = chat.get("race")  # (a Split that ran normally after all has no race any more)
+    if r and chat["id"] in halted and r["stage"] != "done":
         r["stage"] = "stopped"
     with lock:
         save(chat)
@@ -1513,6 +1517,287 @@ def race_action(chat, d):
             add_msg(chat, "system", "The Race's copies were discarded.")
         return 200, {"ok": True}
     return 400, {"error": f"Unknown action: {action}"}
+
+
+# ---------------------------------------------------------------- 🧩 Split (SPEC §14.4)
+# The task is divided into independent parts (by the Planner, or by the user), each agent builds
+# its part in its own copy at the same time, the parts are merged into one combined copy (the
+# Lead fixes clashes), then the Tester and Reviewer check the combined result with the chat's
+# normal fix rounds. Uses the Race's copies, cards, "Use this" and Discard.
+SPLIT_PLAN_NOTE = ("\n\n(🧩 Split · Planner: the user wants the latest request split into parts that agents "
+                   "build at the same time, each in its own copy of the project. Agents who can take a "
+                   "part: {who}. Split it into independent parts: no part may need another part to be "
+                   "finished first. At most one part per agent; not every agent needs one. Explain the "
+                   "split briefly, then list the parts at the end, one per line, exactly like:\n"
+                   "PART @{ex}: <what this agent builds, with file names>\n"
+                   "If the task can't be split into independent parts, say why and end with the line: "
+                   "NO SPLIT)")
+SPLIT_PART_NOTE = ("\n\n(🧩 Split: the task above was divided into parts that are built at the same time, each "
+                   "in its own copy of the project. YOUR part: {part}\nThe other parts (don't do them): "
+                   "{others}\nYour copy is {folder}; work only there. Build only your part, completely, "
+                   "run the tests if there are any, and end with a short summary of what you did.)")
+SPLIT_MERGE_NOTE = ("\n\n(🧩 Split · merge: the parts ({parts}) were built separately and git merged them in "
+                    "this folder ({folder}); these files have conflict markers: {conflicts}. Fix the "
+                    "clashes so all parts work together, make sure no conflict markers (<<<<<<< ======= "
+                    ">>>>>>>) are left, run the tests, and say briefly what you did.)")
+SPLIT_TEST_NOTE = ("\n\n(🧩 Split · Tester: this folder ({folder}) has the combined result of all parts of the "
+                   "task above. Write or update tests for it and run them. Only change test files, never "
+                   "the code under test. Report what fails. End your reply with exactly one line: "
+                   "VERDICT: LGTM if everything passes, or VERDICT: FIX if something must change.)")
+SPLIT_REVIEW_NOTE = ("\n\n(🧩 Split · Reviewer: the task above was split into parts ({parts}) that were built "
+                     "separately and merged. Below is the combined change and the Tester's result. Check it "
+                     "against what the user asked: do the parts work together, bugs, missing pieces, risky "
+                     "edits. Don't modify files. Say concretely what to fix. End your reply with exactly one "
+                     "line: VERDICT: LGTM if nothing needs fixing, or VERDICT: FIX if something must change."
+                     ")\n\nTests: {tests}\n\n{diff}")
+SPLIT_FIX_NOTE = ("\n\n(🧩 Split · fix round {k} of {n}: this folder ({folder}) has the combined result of "
+                  "the task above. The checks found problems:\n\n{findings}\n\nFix them here, run the "
+                  "tests, and say briefly what you changed.)")
+PART_RE = re.compile(r"^\s*(?:[-*•]\s*)?\**PART\**\s+@?([\w-]+)\s*\**\s*:\s*(.+?)\s*$", re.I | re.M)
+NO_SPLIT_RE = re.compile(r"^\s*\**NO SPLIT\**\s*$", re.I | re.M)
+
+
+def split_check(chat, by_planner=False):
+    """'' if a Split can start now, else why not."""
+    why = race_check(chat)
+    if why:
+        return why
+    if by_planner and not any(has_role(chat, b, "planner") for b in agent_ids(chat)):
+        return "needs an agent with the Planner role (or split it yourself)"
+    return ""
+
+
+def start_split(chat, text, parts=None):
+    """🧩 Split. parts: {agent id: its part} (the user's own split), or None (the Planner splits)."""
+    who = racers(chat)
+    if parts is not None:
+        if not isinstance(parts, dict):
+            raise ValueError("parts must be an object: {agent id: part}")
+        parts = {b: str(t).strip()[:4000] for b, t in parts.items() if str(t or "").strip()}
+        bad = [b for b in parts if b not in who]
+        if bad:
+            raise ValueError(f"These agents can't take a part (they can't edit files): {', '.join(bad)}")
+        if len(parts) < 2:
+            raise ValueError("Give at least 2 agents a part (or use a normal message).")
+    why = split_check(chat, by_planner=parts is None)
+    if why:
+        raise ValueError(f"Can't start a Split: {why}.")
+    planner = None if parts else next(b for b in agent_ids(chat) if has_role(chat, b, "planner"))
+    with lock:
+        discard_race(chat)
+        root = copies.repo_root(chat["folder"])
+        sub = os.path.relpath(os.path.realpath(chat["folder"]), root)
+        ref = f"refs/agent-groupchat/{chat['id']}/base"
+        base = copies.snapshot(chat["folder"], ref)
+        checkers = [b for b in stage_agents(chat, "test")[:1] + stage_agents(chat, "review") if b not in who]
+        builders = list(parts) if parts else who
+        to = [b for b in agent_ids(chat) if b in builders or b in checkers or b == planner]
+        halted.discard(chat["id"])
+        idx = add_msg(chat, "user", text, mode="split", to=to,
+                      status={b: "waiting" if planner and b != planner else "queued" for b in to})
+        chat["race"] = {"kind": "split", "msg": idx, "stage": "plan" if planner else "parts",
+                        "planner": planner, "parts": parts or {}, "root": root, "sub": sub, "base": base,
+                        "ref": ref, "racers": builders, "copies": {}, "pick": None, "used": None, "fix": 0}
+        save(chat)
+
+
+def split_feedback(chat, text):
+    """A reply while the Planner's split waits for the OK: back to the Planner."""
+    r = chat["race"]
+    with lock:
+        add_msg(chat, "user", text, mode="split-feedback", to=[r["planner"]],
+                status={r["planner"]: "queued"})
+        r["stage"] = "plan"
+        save(chat)
+
+
+def split_go(chat):
+    """The user OK'd the Planner's parts."""
+    r = chat.get("race")
+    if not r or r.get("kind") != "split" or r["stage"] != "await":
+        return False
+    with lock:
+        r["stage"] = "parts"
+        for b in r["racers"]:
+            set_status(chat, [r["msg"]], b, "queued", only=("waiting",))
+        for b in [x for x in stage_agents(chat, "test")[:1] + stage_agents(chat, "review")]:
+            set_status(chat, [r["msg"]], b, "queued", only=("waiting",))
+        save(chat)
+    return True
+
+
+def split_plan(chat, r):
+    """The Planner proposes the parts; then wait for the OK (or run normally if it can't split)."""
+    who = racers(chat)
+    note = SPLIT_PLAN_NOTE.format(who=", ".join(f"{display(chat, b)} (@{b})" for b in who),
+                                  ex=who[0])
+    reply = ask(chat, r["planner"], note, role="Planner · 🧩 Split", stage="plan-split", force=True) or ""
+    if outcome(reply) != "done":
+        r["stage"] = "stopped"
+        return
+    parts = {}
+    for b, text in PART_RE.findall(reply):
+        b = b.lower()
+        if b in who and b not in parts:
+            parts[b] = text
+    if NO_SPLIT_RE.search(reply) or len(parts) < 2:
+        run_normally(chat, r, "The Planner didn't split this task into 2 or more independent parts, "
+                              "so it runs as a normal message.")
+        return
+    r["parts"], r["racers"], r["stage"] = parts, list(parts), "await"
+    m = chat["messages"][r["msg"]]
+    for b in list(m.get("status") or {}):  # agents without a part have nothing to do
+        if b not in parts and b != r["planner"] and m["status"][b] == "waiting" and \
+                b not in stage_agents(chat, "test") + stage_agents(chat, "review"):
+            m["status"][b] = "skipped"
+
+
+def run_normally(chat, r, why):
+    """Fall back: the Split message becomes a normal message (the flow or direct answers)."""
+    m = chat["messages"][r["msg"]]
+    with lock:
+        m.pop("mode", None)
+        m["status"] = {b: st for b, st in (m.get("status") or {}).items() if b == r.get("planner")}
+        want, flow = route(chat, m)
+        to = [b for b in agent_ids(chat) if b in want or (flow and b in flow_agents(chat))]
+        m["to"] = list(dict.fromkeys([*m["status"], *to]))
+        for b in to:
+            m["status"].setdefault(b, "queued")
+        if flow:
+            chat["flow"] = {"msg": r["msg"], "stages": [s for s in flow_stages(chat) if s not in ("plan", "await")],
+                            "i": 0, "fix": 0, "waiting": False}
+        add_msg(chat, "system", why)
+        discard_race(chat)
+
+
+def split_parts(chat, r):
+    """Every agent with a part builds it in its own copy, all at the same time."""
+    context, task = race_context(chat, r), chat["messages"][r["msg"]]["text"]
+
+    def go(b):
+        path = worktree_dir(chat, b)
+        c = {"agent": b, "name": display(chat, b), "path": path, "status": "working",
+             "branch": f"agent/{chat['id']}/{b}", "part": r["parts"][b]}
+        copies.make_copy(r["root"], r["base"], path, c["branch"])
+        c["folder"] = path if r["sub"] == "." else os.path.join(path, r["sub"])
+        with lock:
+            r["copies"][b] = c
+        others = "; ".join(f"{display(chat, x)}: {t}" for x, t in r["parts"].items() if x != b) or "none"
+        prompt = ((context + "\n\n") if context else "") + f"[User]: {task}" + \
+            SPLIT_PART_NOTE.format(part=r["parts"][b], others=others, folder=c["folder"])
+        reply, meta = ask_copy(chat, b, c["folder"], prompt, "🧩 Part", "part", [r["msg"]])
+        post_copy_reply(chat, r, b, b, reply, meta)
+    ts = [threading.Thread(target=go, args=(b,)) for b in r["parts"]]
+    for t in ts: t.start()
+    for t in ts: t.join()
+
+
+def split_fixer(chat, r):
+    return next((b for b in r["parts"] if has_role(chat, b, "lead")), next(iter(r["parts"])))
+
+
+def split_merge(chat, r):
+    """Merge the finished parts into one combined copy; the Lead fixes clashes."""
+    done = [n for n, c in r["copies"].items() if c["status"] == "done"]
+    if not done:
+        add_msg(chat, "system", "🧩 No part changed any files, so there's nothing to merge.")
+        r["stage"] = "stopped"
+        return
+    path, branch = worktree_dir(chat, "combined"), f"agent/{chat['id']}/combined"
+    conflicts = copies.merge_copies(r["root"], r["base"], [r["copies"][n]["branch"] for n in done],
+                                    path, branch)
+    folder = path if r["sub"] == "." else os.path.join(path, r["sub"])
+    fixer = split_fixer(chat, r)
+    label = " + ".join(r["copies"][n]["name"] for n in done)
+    with lock:
+        r["copies"]["combined"] = {"agent": fixer, "name": f"Combined ({label})", "path": path,
+                                   "folder": folder, "branch": branch, "status": "working", "from": done}
+    if conflicts:
+        prompt = f"[User]: {chat['messages'][r['msg']]['text']}" + SPLIT_MERGE_NOTE.format(
+            parts=label, folder=folder, conflicts=", ".join(conflicts))
+        reply, meta = ask_copy(chat, fixer, folder, prompt, "🧩 Merge", "combine", [])
+        post_copy_reply(chat, r, fixer, "combined", reply, meta)
+    else:
+        c = r["copies"]["combined"]
+        c["files"] = copies.changed_files(r["root"], r["base"], branch)
+        text = copies.diff(r["root"], r["base"], branch, binary=False)
+        c["diff"] = [text.count("\n+") - text.count("\n+++"), text.count("\n-") - text.count("\n---")]
+        c["status"] = "done"
+        add_msg(chat, "system", f"🧩 The parts ({label}) merged without clashes.")
+
+
+def split_check_result(chat, r):
+    """Tester + Reviewer check the combined copy; FIX verdicts -> fix rounds (chat setting)."""
+    c = r["copies"].get("combined")
+    if not c or c["status"] != "done":
+        return "stopped"
+    task = chat["messages"][r["msg"]]["text"]
+    verdicts, findings, tests = [], [], "not run"
+    for tester in [b for b in stage_agents(chat, "test") if b not in r["parts"]][:1]:
+        before = copies.git(c["path"], "rev-parse", "HEAD").strip()
+        reply, meta = ask_copy(chat, tester, c["folder"], f"[User]: {task}" +
+                               SPLIT_TEST_NOTE.format(folder=c["folder"]), "Tester · 🧩 Split", "test", [r["msg"]])
+        copies.save_copy(c["path"], "tests")
+        changed = [f for f in copies.git(c["path"], "diff", "--name-only", before, "HEAD").splitlines() if f]
+        other = [f for f in changed if not is_test_file(f)]
+        if other:
+            meta["warn"] = "the Tester changed non-test files: " + ", ".join(other[:5])
+        v = verdict(reply)
+        if v:
+            meta["verdict"] = v
+        meta["copy"] = "combined"
+        add_msg(chat, tester, reply, meta=meta)
+        tests = first_line(reply)[2:][:160] if outcome(reply) == "done" else reply[:160]
+        c["tests"] = tests
+        verdicts.append(v)
+        if v == "FIX":
+            findings.append(f"[{display(chat, tester)}, tester]: {reply}")
+    text = copies.diff(r["root"], r["base"], c["branch"], binary=False)
+    if len(text) > 30_000:
+        text = text[:30_000] + "\n… (cut: the diff is longer)"
+    c["files"] = copies.changed_files(r["root"], r["base"], c["branch"])
+    c["diff"] = [text.count("\n+") - text.count("\n+++"), text.count("\n-") - text.count("\n---")]
+    note = SPLIT_REVIEW_NOTE.format(parts=", ".join(display(chat, b) for b in r["parts"]),
+                                    tests=tests, diff=text)
+    for rev in [b for b in stage_agents(chat, "review") if b not in r["parts"]]:
+        reply = ask(chat, rev, note, role="Reviewer · 🧩 Split", stage="review", force=True) or ""
+        v = verdict(reply)
+        verdicts.append(v)
+        if v == "FIX":
+            findings.append(f"[{display(chat, rev)}, reviewer]: {reply}")
+    if findings and r["fix"] < chat.get("fix_rounds", 1):
+        r["findings"] = "\n\n".join(findings)
+        return "fix"
+    return "done"
+
+
+def split_fix(chat, r):
+    """One fix round in the combined copy, then check again."""
+    r["fix"] += 1
+    c = r["copies"]["combined"]
+    fixer = split_fixer(chat, r)
+    prompt = f"[User]: {chat['messages'][r['msg']]['text']}" + SPLIT_FIX_NOTE.format(
+        k=r["fix"], n=chat.get("fix_rounds", 1), folder=c["folder"], findings=r.pop("findings", ""))
+    reply, meta = ask_copy(chat, fixer, c["folder"], prompt, f"🧩 Fix round {r['fix']}", "combine", [])
+    post_copy_reply(chat, r, fixer, "combined", reply, meta)
+
+
+def step_split(chat, r):
+    stage = r["stage"]
+    if stage == "plan":
+        split_plan(chat, r)
+    elif stage == "parts":
+        split_parts(chat, r)
+        r["stage"] = "merge"
+    elif stage == "merge":
+        split_merge(chat, r)
+        if r["stage"] == "merge":
+            r["stage"] = "check"
+    elif stage == "check":
+        r["stage"] = split_check_result(chat, r)
+    elif stage == "fix":
+        split_fix(chat, r)
+        r["stage"] = "check"
 
 
 def set_agents(chat, specs):
@@ -1810,6 +2095,8 @@ class Handler(BaseHTTPRequestHandler):
                                        "git": git_status(c["folder"]),
                                        "race": race_view(c), "race_block": race_check(c),
                                        "racers": racers(c),
+                                       "split_block": split_check(c),
+                                       "split_planner": not split_check(c, by_planner=True),
                                        "colors": {a["id"]: get_adapter(a["adapter"]).color
                                                   for a in c["agents"]},
                                        "resume": {b: adapter_of(c, b).resume_hint(sid)
@@ -1879,11 +2166,20 @@ class Handler(BaseHTTPRequestHandler):
             sk = parse_skill(text, c["folder"])
             with lock:
                 halted.discard(c["id"])
+            r = c.get("race")
             if d.get("mode") == "race":
                 try:
                     start_race(c, text)
                 except (ValueError, copies.GitError) as e:
                     return self.send_json({"error": str(e)}, 400)
+            elif d.get("mode") == "split":
+                try:
+                    start_split(c, text, d.get("parts") if d.get("split") == "own" else None)
+                except (ValueError, copies.GitError) as e:
+                    return self.send_json({"error": str(e)}, 400)
+            elif r and r.get("kind") == "split" and r["stage"] == "await" and not sk \
+                    and not mentioned(c, text):
+                split_feedback(c, text)  # a reply to the Planner's parts: it revises them
             else:
                 post_user_message(c, text, sk)
             kick(c)
@@ -1910,8 +2206,10 @@ class Handler(BaseHTTPRequestHandler):
             except (copies.GitError, OSError) as e:
                 return self.send_json({"error": f"Couldn't initialize git: {e}"}, 400)
             return self.send_json({"ok": True, "git": git_status(c["folder"], fresh=True)})
-        elif action == "go":  # the plan is OK: start the work
-            if not go_ahead(c):
+        elif action == "go":  # the plan (or the Split's parts) is OK: start the work
+            if split_go(c):
+                kick(c)
+            elif not go_ahead(c):
                 return self.send_json({"error": "Nothing is waiting for your OK."}, 409)
             kick(c)
         elif action == "agents":  # change roles / permission overrides

@@ -56,6 +56,8 @@ if os.environ.get("FAKE_TIMES"):
 reply = rule.get("reply", f"fake {style} reply")
 writes = rule.get("write") or {}
 for path, text in writes.items():
+    if os.path.dirname(path):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         f.write(text)
 

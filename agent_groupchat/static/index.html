@@ -134,8 +134,13 @@
   form#f button { background:var(--user); color:#fff; border:0; border-radius:10px;
                   padding:0 18px; font-weight:600; cursor:pointer; }
   form#f button#stopBtn { background:var(--bg); color:#c33; border:1px solid #e5a3a0; }
-  form#f button#raceBtn, form#f button#gitInit { background:var(--bg); color:var(--text); border:1px solid var(--border); }
-  form#f button#raceBtn:disabled { opacity:.45; cursor:help; }
+  form#f button#raceBtn, form#f button#splitBtn, form#f button#gitInit { background:var(--bg); color:var(--text); border:1px solid var(--border); }
+  form#f button#raceBtn:disabled, form#f button#splitBtn:disabled { opacity:.45; cursor:help; }
+  #splitDlg textarea { width:100%; min-height:52px; padding:6px 8px; border-radius:8px; border:1px solid var(--border);
+                       background:var(--bg); font-size:13px; resize:vertical; }
+  #splitDlg label.opt { display:flex; gap:8px; align-items:flex-start; color:var(--text); margin:8px 0 2px; }
+  #splitDlg label.opt input { width:auto; margin-top:4px; }
+  #splitParts .p { margin:6px 0 0 24px; } #splitParts .p b { font-size:13px; }
   .note { align-self:center; font-size:12px; color:var(--muted); background:var(--panel); border:1px dashed var(--border);
           border-radius:10px; padding:4px 12px; max-width:90%; text-align:center; }
   /* ⚡ Race compare view */
@@ -284,6 +289,7 @@
     <button type="button" id="stopBtn" hidden title="Stop the running replies (and the rest of this turn)">■ Stop</button>
     <button type="button" id="gitInit" hidden title="Make this folder a git repo (git init + a first commit; your files don't change). ⚡ Race needs it.">Initialize git here</button>
     <button type="button" id="raceBtn" title="⚡ Race">⚡ Race</button>
+    <button type="button" id="splitBtn" title="🧩 Split">🧩 Split</button>
     <button type="submit">Send</button>
   </form>
   </div>
@@ -365,6 +371,26 @@
   </form>
 </dialog>
 
+<dialog id="splitDlg">
+  <form method="dialog">
+    <h2>🧩 Split this task</h2>
+    <label for="splitTask">The task</label>
+    <textarea id="splitTask"></textarea>
+    <label class="opt"><input type="radio" name="splitBy" value="planner" id="splitByPlanner">
+      <span><b>Let the Planner split it</b><br><span class="hint" id="splitPlannerHint">It proposes the parts and waits for your OK (or reply to change them).</span></span></label>
+    <label class="opt"><input type="radio" name="splitBy" value="own" id="splitByOwn">
+      <span><b>I'll split it myself</b><br><span class="hint">Write each agent's part; leave a box empty for no part. They start at once.</span></span></label>
+    <div id="splitParts"></div>
+    <div class="hint">Parts must be independent: built at the same time, without waiting for each other. Afterwards the
+      parts are merged into one result, the Lead fixes clashes, and the Tester and Reviewer check it.</div>
+    <div id="splitErr" style="color:#d33;font-size:13px;margin-top:8px"></div>
+    <div class="row">
+      <button value="cancel" formnovalidate>Cancel</button>
+      <button class="go" id="splitStart" value="default">Start the Split</button>
+    </div>
+  </form>
+</dialog>
+
 <dialog id="team">
   <form method="dialog">
     <h2>Team: roles and permissions</h2>
@@ -430,8 +456,12 @@ function showAgents() {  // one chip per agent: name · role(s) · permission (�
 }
 function showFlow() {
   const f = chat && chat.flow, wait = !!(f && f.waiting);
-  $('flowbar').hidden = !wait;
-  if (wait) {
+  const r = chat && chat.race, splitWait = !!(r && r.kind === 'split' && r.stage === 'await');
+  $('flowbar').hidden = !wait && !splitWait;
+  if (splitWait) {
+    const n = Object.keys(r.parts || {}).length;
+    $('flowtext').textContent = `⏸️ The Planner split the task into ${n} parts (see its message). Go ahead, or reply to change them.`;
+  } else if (wait) {
     const planners = agentList.filter(a => (a.roles || []).includes('planner')).map(a => a.id);
     $('flowtext').textContent = `⏸️ ${listNames(planners) || 'The Planner'} proposed a plan. Read it, then go ahead, or reply to change it.`;
   }
@@ -510,6 +540,11 @@ async function refresh() {
     `⚡ Race: ${listNames(c.racers || [])} each do this message in their own copy of the project, at the same time. ` +
     'Then the Tester tests each copy, the Reviewer compares them, and you pick one. Costs about one turn per agent.';
   $('gitInit').hidden = !canInit;
+  const sb = $('splitBtn');
+  sb.disabled = !!c.split_block;
+  sb.title = c.split_block ? `🧩 Split isn't possible here: ${c.split_block}.` :
+    '🧩 Split: divide this task into parts that agents build at the same time, each in its own copy. ' +
+    'The parts are merged, then tested and reviewed. About the cost of one agent doing it all, but faster.';
   const sig = c.messages.length + '|' + JSON.stringify(c.sessions) + '|' + JSON.stringify(c.flow) + '|' +
     JSON.stringify(c.race) + '|' + c.busy + '|' +
     JSON.stringify(c.messages.map(m => [m.status, m.retried]));
@@ -533,7 +568,7 @@ async function refresh() {
       if (m.who !== 'user') d.style.setProperty('--c', colorOf(m.who));
       const w = document.createElement('div'); w.className = 'who';
       w.textContent = summary ? `📋 Chat summary (by ${names[m.who] || m.who}): fresh sessions continue from here`
-        : (names[m.who] || m.who) + (m.mode === 'race' ? ' · ⚡ Race' : '') + (meta.role ? ' · ' + meta.role : '') + (m.retried ? ' · retried' : '');
+        : (names[m.who] || m.who) + (m.mode === 'race' ? ' · ⚡ Race' : m.mode === 'split' ? ' · 🧩 Split' : '') + (meta.role ? ' · ' + meta.role : '') + (m.retried ? ' · retried' : '');
       if (meta.verdict) {
         const v = document.createElement('span'); v.className = 'verdict ' + (meta.verdict === 'LGTM' ? 'ok' : 'fix');
         v.textContent = meta.verdict === 'LGTM' ? '✓ LGTM' : '✗ needs fixes'; w.append(v);
@@ -690,10 +725,16 @@ let raceOpen = new Set(), raceDiffs = {}, raceSel = new Set();
 const RACE_STAGE = {work: 'the agents are working in their copies…', test: 'the Tester is testing each copy…',
   review: 'the Reviewer is comparing the copies…', combine: 'combining copies…',
   done: 'pick the copy you want', stopped: 'stopped (finished copies can still be used)'};
+const SPLIT_STAGE = {plan: 'the Planner is splitting the task…', await: 'waiting for your OK on the parts',
+  parts: 'the agents are building their parts…', merge: 'merging the parts…',
+  check: 'the Tester and Reviewer are checking the combined result…', fix: 'fixing what the checks found…',
+  done: 'the combined result is ready', stopped: 'stopped (finished copies can still be used)'};
 function racePanel(c) {  // one card per copy: Use this one / ▸ Diff / combine; Discard at the bottom
-  const r = c.race, box = document.createElement('div'); box.className = 'race';
+  const r = c.race, split = r.kind === 'split', box = document.createElement('div'); box.className = 'race';
   const head = document.createElement('div'); head.className = 'rhead';
-  head.textContent = `⚡ Race: ${RACE_STAGE[r.stage] || r.stage}`; box.append(head);
+  head.textContent = split ? `🧩 Split: ${SPLIT_STAGE[r.stage] || r.stage}` + (r.fix ? ` (fix round ${r.fix})` : '')
+                           : `⚡ Race: ${RACE_STAGE[r.stage] || r.stage}`;
+  box.append(head);
   const ready = (r.stage === 'done' || r.stage === 'stopped') && !c.busy;
   const cards = document.createElement('div'); cards.className = 'cards';
   for (const [name, cp] of Object.entries(r.copies)) {
@@ -703,10 +744,12 @@ function racePanel(c) {  // one card per copy: Use this one / ▸ Diff / combine
     const t = document.createElement('div'), b = document.createElement('b'); b.textContent = cp.name; t.append(b);
     const badge = (txt, color) => { const s = document.createElement('span'); s.className = 'badge2'; s.style.color = color; s.textContent = txt; t.append(s); };
     if (r.pick === name) badge("⭐ Reviewer's pick", '#b7791f');
+    if (split && name === 'combined') badge('🧩 Result', '#2f6fde');
     if (r.used === name) badge('✓ used', '#1a7f37');
     card.append(t);
     const line = txt => { const d = document.createElement('div'); d.className = 'muted'; d.textContent = txt; card.append(d); };
     const st = {working: '● working…', done: '✓ finished', empty: '– changed nothing', error: '✗ error', stopped: '■ stopped', 'timed out': '⏱ timed out'};
+    if (cp.part) line('🧩 Part: ' + cp.part);
     line(st[cp.status] || cp.status);
     if (cp.files && cp.files.length) line(`✏️ ${cp.files.length} file${cp.files.length > 1 ? 's' : ''}: ${cp.files.join(', ')}` +
       (cp.diff ? `  (+${cp.diff[0]} −${cp.diff[1]})` : ''));
@@ -725,7 +768,7 @@ function racePanel(c) {  // one card per copy: Use this one / ▸ Diff / combine
     cb.disabled = !ready || cp.status !== 'done';
     cb.onchange = () => { cb.checked ? raceSel.add(name) : raceSel.delete(name); comb.disabled = !ready || raceSel.size < 2; };
     lab.append(cb, ' combine');
-    row.append(use, dbtn, lab); card.append(row);
+    row.append(use, dbtn); if (!split) row.append(lab); card.append(row);
     if (raceOpen.has(name)) {
       const d = document.createElement('div'); d.className = 'diff'; d.textContent = 'Loading…'; card.append(d);
       (async () => {
@@ -751,7 +794,9 @@ function racePanel(c) {  // one card per copy: Use this one / ▸ Diff / combine
   disc.onclick = async () => { if (!confirm("Delete the Race's copies? (Changes you already used stay in your folder.)")) return;
     const res = await api(`/api/chats/${current}/race`, {action: 'discard'}); if (res.error) alert(res.error);
     raceOpen = new Set(); raceDiffs = {}; lastSig = ''; refresh(); };
-  foot.append(comb, disc, document.createTextNode('Copies stay until the next Race or Discard.'));
+  if (!split) foot.append(comb);
+  foot.append(disc, document.createTextNode(split ? 'Use the 🧩 Result to bring the whole thing into your folder. Copies stay until the next Race/Split or Discard.'
+                                                  : 'Copies stay until the next Race or Discard.'));
   box.append(foot);
   return box;
 }
@@ -811,6 +856,42 @@ $('raceBtn').onclick = async () => {
   if (r.error) { alert(r.error); return; }
   $('t').value = ''; updateTo(); raceOpen = new Set(); raceDiffs = {}; raceSel = new Set(); lastSig = '';
   refresh(); loadList();
+};
+function splitMode() { return $('splitByOwn').checked ? 'own' : 'planner'; }
+function showSplitParts() {
+  const box = $('splitParts'); box.hidden = splitMode() !== 'own';
+}
+$('splitBtn').onclick = () => {
+  if (!chat) return;
+  $('splitTask').value = $('t').value.trim(); $('splitErr').textContent = '';
+  const canPlan = !!chat.split_planner;
+  $('splitByPlanner').disabled = !canPlan;
+  $('splitPlannerHint').textContent = canPlan ? 'It proposes the parts and waits for your OK (or reply to change them).'
+    : 'Not possible: no agent in this chat has the Planner role (add one under Team).';
+  (canPlan ? $('splitByPlanner') : $('splitByOwn')).checked = true;
+  const box = $('splitParts'); box.textContent = '';
+  for (const id of chat.racers || []) {
+    const d = document.createElement('div'); d.className = 'p';
+    const b = document.createElement('b'); b.style.color = colorOf(id); b.textContent = (names[id] || id) + "'s part";
+    const ta = document.createElement('textarea'); ta.dataset.id = id; ta.placeholder = 'e.g. build the login API in api.py (empty = no part)';
+    d.append(b, ta); box.append(d);
+  }
+  showSplitParts(); $('splitDlg').showModal();
+};
+$('splitByPlanner').onchange = showSplitParts; $('splitByOwn').onchange = showSplitParts;
+$('splitStart').onclick = async e => {
+  e.preventDefault();
+  const text = $('splitTask').value.trim();
+  if (!text) { $('splitErr').textContent = 'Write the task first.'; return; }
+  const body = {text, mode: 'split', split: splitMode()};
+  if (body.split === 'own') {
+    body.parts = {};
+    for (const ta of $('splitParts').querySelectorAll('textarea')) if (ta.value.trim()) body.parts[ta.dataset.id] = ta.value.trim();
+  }
+  const r = await api(`/api/chats/${current}/send`, body);
+  if (r.error) { $('splitErr').textContent = r.error; return; }
+  $('splitDlg').close(); $('t').value = ''; updateTo();
+  raceOpen = new Set(); raceDiffs = {}; raceSel = new Set(); lastSig = ''; refresh(); loadList();
 };
 $('gitInit').onclick = async () => {
   if (!confirm('Make this folder a git repo? (git init + a first commit of the current files. Your files ' +
@@ -876,7 +957,8 @@ function updateTo() {
   const nm = b => `<b style="color:${colorOf(b)}">${esc(names[b] || b)}</b>`;
   const list = who.length > 2 ? who.slice(0, -1).map(nm).join(', ') + ' and ' + nm(who[who.length - 1])
                               : who.map(nm).join(' and ');
-  const waiting = chat && chat.flow && chat.flow.waiting;
+  const waiting = (chat && chat.flow && chat.flow.waiting) ||
+    (chat && chat.race && chat.race.kind === 'split' && chat.race.stage === 'await');
   $('to').innerHTML = !text.trim() ? '' :
     (sk ? `→ runs <b>/${esc(sk.name)}</b> on ${list}` :
      flow && waiting ? `→ back to ${inStage('plan').map(nm).join(' + ')} to change the plan` :
