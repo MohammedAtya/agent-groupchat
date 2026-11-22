@@ -7,11 +7,11 @@ from ..skills import HOME, ancestors, scan_skill_dirs
 from .base import TALK_TEXT, Adapter, add_file, error_text, first_line, rel
 
 
-def config(ability):
-    """ability -> Codex `-c` settings (sandbox + approvals)."""
-    sandbox = "workspace-write" if ability in ("work", "auto") else "read-only"
+def config(level):
+    """Permission level -> Codex `-c` settings (sandbox + approvals)."""
+    sandbox = "workspace-write" if level in ("work", "auto") else "read-only"
     conf = ["-c", f'sandbox_mode="{sandbox}"']
-    if ability == "auto":
+    if level == "auto":
         # Codex's "approve for me": when the sandbox blocks something (internet, a
         # folder outside the project...), Codex asks for escalation and its
         # automatic reviewer (guardian) approves or denies it, like Claude's auto mode.
@@ -24,18 +24,24 @@ class CodexAdapter(Adapter):
     name = "Codex"
     kind = "OpenAI's coding agent"
     color = "#10a37f"
+    # No "edit": Codex has no "edit files but run no commands" setting.
+    levels = ("talk", "read", "work", "auto")
+    needs_sandbox = ("work", "auto")
+    level_notes = {
+        "talk": "Codex can't be stopped from reading files; it stays read-only and is told "
+                "to only discuss.",
+        "edit": "Codex has no \"edit files but run no commands\" setting.",
+    }
     mode_texts = {
         "talk": TALK_TEXT,
-        "work": "WORK mode: you may edit files and run commands inside the project folder "
+        "read": "READ: you may read files and run read-only commands (your sandbox is "
+                "read-only), but don't modify anything.",
+        "work": "WORK: you may edit files and run commands inside the project folder "
                 "(workspace-write sandbox).",
-        "edit-only": "LIMITED mode (sandbox unavailable): you are read-only, so leave the "
-                     "hands-on work to the AIs that can edit.",
-        "auto": "AUTO mode: you may run commands and edit files where the user asks. You start "
+        "auto": "AUTO: you may run commands and edit files where the user asks. You start "
                 "sandboxed to the project folder with no internet; if blocked, request escalated "
                 "permissions and the automatic reviewer will approve or deny. Risky actions are "
                 "blocked.",
-        "auto-limited": "AUTO mode, but your sandbox is unavailable, so you are read-only: leave "
-                        "the hands-on work to the AIs that can edit.",
     }
     intro_note = (" Note: in your workspace-write sandbox, empty read-only .git/.codex/.agents/.aws "
                   "folders can appear in the project; they are sandbox mount points, not real "
@@ -43,9 +49,9 @@ class CodexAdapter(Adapter):
     skill_syntax = "dollar"
     command = ["codex"]
 
-    def run(self, ctx, prompt, ability):
+    def run(self, ctx, prompt, level):
         sid = ctx.session
-        conf = config(ability)
+        conf = config(level)
         if ctx.model:
             conf += ["-c", f'model="{ctx.model}"']
         out = {"files": [], "usage": None}

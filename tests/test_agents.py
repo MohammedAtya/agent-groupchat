@@ -50,58 +50,56 @@ def codex_conf(sandbox, auto=False):
     return c + ["-c", 'approval_policy="never"']
 
 
+SAFE_BASH = ["Bash(git diff:*)", "Bash(git status:*)", "Bash(git log:*)", "Bash(git show:*)",
+             "Bash(ls:*)"]
+TEST_BASH = ["Bash(pytest:*)", "Bash(python -m pytest:*)", "Bash(python3 -m pytest:*)",
+             "Bash(python -m unittest:*)", "Bash(python3 -m unittest:*)", "Bash(npm test:*)",
+             "Bash(npm run test:*)", "Bash(cargo test:*)", "Bash(go test:*)"]
+TALK = ["--permission-mode", "dontAsk", "--tools", ""]
+READ_SANDBOX = ["--permission-mode", "dontAsk", "--settings", SANDBOX, "--allowedTools", *READ,
+                *SAFE_BASH, *TEST_BASH, "--disallowedTools", *EDIT_NAMES]
+READ_NO_SANDBOX = ["--permission-mode", "dontAsk", "--allowedTools", *READ, *SAFE_BASH,
+                   "--disallowedTools", *EDIT_NAMES]
+EDIT_ONLY = ["--permission-mode", "acceptEdits", "--allowedTools", *READ, "--disallowedTools", "Bash"]
+WORK_FLAGS = ["--permission-mode", "acceptEdits", "--settings", SANDBOX, "--allowedTools", *WORK]
+AUTO = ["--permission-mode", "auto"]
+
+
 class ClaudeCommand(ChatTest):
-    def run_one(self, mode, lead=None, text="@claude hi"):
-        c = self.chat(mode, lead=lead)
+    def run_one(self, level="read", text="@claude hi", **kw):
+        c = self.chat(agents=[{"adapter": "claude", "level": level}, "codex"], **kw)
         self.send(c, text)
         return c
 
-    def test_talk(self):
-        self.run_one("talk")
-        (call,) = self.calls("claude")
-        self.assertEqual(claude_args(call["argv"]),
-                         claude_expected(["--permission-mode", "dontAsk", "--allowedTools", *READ]))
-        self.assertEqual(call["cwd"], self.folder)
+    def flags(self):
+        return claude_args(self.calls("claude")[-1]["argv"])
 
-    def test_work(self):
-        self.run_one("work")
-        self.assertEqual(claude_args(self.calls("claude")[0]["argv"]), claude_expected(
-            ["--permission-mode", "acceptEdits", "--settings", SANDBOX, "--allowedTools", *WORK]))
-
-    def test_work_without_sandbox_is_edit_only(self):
-        self.sandbox = False
-        self.run_one("work")
-        self.assertEqual(claude_args(self.calls("claude")[0]["argv"]), claude_expected(
-            ["--permission-mode", "acceptEdits", "--allowedTools", *READ,
-             "--disallowedTools", "Bash"]))
-
-    def test_auto(self):
-        for sandbox in (True, False):
-            with self.subTest(sandbox=sandbox):
+    def test_each_level(self):
+        for sandbox, level, perms in [
+                (True, "talk", TALK), (True, "read", READ_SANDBOX), (False, "read", READ_NO_SANDBOX),
+                (True, "edit", EDIT_ONLY), (True, "work", WORK_FLAGS),
+                (False, "work", EDIT_ONLY),  # no sandbox: commands can't be confined -> edit only
+                (True, "auto", AUTO), (False, "auto", AUTO)]:
+            with self.subTest(level=level, sandbox=sandbox):
                 self.sandbox = sandbox
-                os.remove(self.log) if os.path.exists(self.log) else None
-                self.run_one("auto")
-                self.assertEqual(claude_args(self.calls("claude")[0]["argv"]),
-                                 claude_expected(["--permission-mode", "auto"]))
+                self.run_one(level)
+                self.assertEqual(self.flags(), claude_expected(perms))
 
-    def test_reviewer_in_work_mode_has_no_edit_tools(self):
-        self.run_one("work", lead="codex", text="fix it")
-        self.assertEqual(claude_args(self.calls("claude")[0]["argv"]), claude_expected(
-            ["--permission-mode", "dontAsk", "--settings", SANDBOX, "--allowedTools", *READ,
-             "Bash", "--disallowedTools", *EDIT_NAMES]))
+    def test_default_participant_works(self):
+        c = self.chat()
+        self.send(c, "@claude hi")
+        self.assertEqual(self.flags(), claude_expected(WORK_FLAGS))
 
-    def test_reviewer_in_auto_mode_has_no_edit_tools(self):
-        self.run_one("auto", lead="codex", text="fix it")
-        self.assertEqual(claude_args(self.calls("claude")[0]["argv"]), claude_expected(
-            ["--permission-mode", "auto", "--disallowedTools", *EDIT_NAMES]))
+    def test_talk_only_lock_beats_everything(self):
+        self.run_one("auto", lock=True)
+        self.assertEqual(self.flags(), claude_expected(TALK))
 
-    def test_reviewer_in_talk_mode_is_talk(self):
-        self.run_one("talk", lead="codex", text="fix it")
-        self.assertEqual(claude_args(self.calls("claude")[0]["argv"]),
-                         claude_expected(["--permission-mode", "dontAsk", "--allowedTools", *READ]))
+    def test_cwd_is_the_project(self):
+        self.run_one()
+        self.assertEqual(self.calls("claude")[0]["cwd"], self.folder)
 
     def test_session_is_created_then_resumed(self):
-        c = self.run_one("talk")
+        c = self.run_one("read")
         first = self.calls("claude")[0]["argv"]
         sid = first[first.index("--session-id") + 1]
         self.assertRegex(sid, UUID)
@@ -112,7 +110,7 @@ class ClaudeCommand(ChatTest):
         self.assertNotIn("--session-id", second)
 
     def test_intro_and_prompt(self):
-        self.run_one("talk")
+        self.run_one("read")
         argv = self.calls("claude")[0]["argv"]
         intro = argv[argv.index("--append-system-prompt") + 1]
         self.assertIn("You are Claude, a member of a group chat with a human user and "
@@ -120,12 +118,12 @@ class ClaudeCommand(ChatTest):
         self.assertIn("([Codex])", intro)
         self.assertIn("@codex reaches that one only", intro)
         self.assertIn(f"Project folder: {self.folder}.", intro)
-        self.assertIn("TALK mode", intro)
+        self.assertIn("READ: you may read", intro)
         self.assertNotIn("sandbox mount points", intro)
         self.assertEqual(argv[-1], "[User]: @claude hi")
 
     def test_reply_and_stats(self):
-        c = self.run_one("talk")
+        c = self.run_one("read")
         (r,) = self.replies(c, "claude")
         self.assertEqual(r["text"], "fake claude reply")
         self.assertEqual(r["meta"]["cost"], 0.0123)
@@ -135,7 +133,7 @@ class ClaudeCommand(ChatTest):
 
     def test_failure_becomes_error_reply(self):
         self.rules({"style": "claude", "exit": 3})
-        c = self.run_one("talk")
+        c = self.run_one("read")
         (r,) = self.replies(c, "claude")
         self.assertTrue(r["text"].startswith("(error)"), r["text"])
         self.assertIn("fake failure", r["text"])
@@ -154,8 +152,8 @@ class ClaudeCommand(ChatTest):
 
 
 class CodexCommand(ChatTest):
-    def run_one(self, mode, lead=None, text="@codex hi"):
-        c = self.chat(mode, lead=lead)
+    def run_one(self, level="read", text="@codex hi", **kw):
+        c = self.chat(agents=["claude", {"adapter": "codex", "level": level}], **kw)
         self.send(c, text)
         return c
 
@@ -163,43 +161,25 @@ class CodexCommand(ChatTest):
         return ["exec", "--skip-git-repo-check", "--json", *conf, "-C", self.folder,
                 "-o", "<out>", "<prompt>"]
 
-    def test_talk(self):
-        self.run_one("talk")
-        (call,) = self.calls("codex")
-        self.assertEqual(codex_args(call["argv"]), self.expected_new(codex_conf("read-only")))
+    def test_each_level(self):
+        for sandbox, level, conf in [
+                (True, "talk", codex_conf("read-only")),  # can't hide files from Codex
+                (True, "read", codex_conf("read-only")),
+                (True, "work", codex_conf("workspace-write")),
+                (False, "work", codex_conf("read-only")),
+                (True, "auto", codex_conf("workspace-write", auto=True)),
+                (False, "auto", codex_conf("read-only"))]:
+            with self.subTest(level=level, sandbox=sandbox):
+                self.sandbox = sandbox
+                self.run_one(level)
+                self.assertEqual(codex_args(self.calls("codex")[-1]["argv"]), self.expected_new(conf))
 
-    def test_work(self):
-        self.run_one("work")
-        self.assertEqual(codex_args(self.calls("codex")[0]["argv"]),
-                         self.expected_new(codex_conf("workspace-write")))
-
-    def test_work_without_sandbox_is_read_only(self):
-        self.sandbox = False
-        self.run_one("work")
-        self.assertEqual(codex_args(self.calls("codex")[0]["argv"]),
-                         self.expected_new(codex_conf("read-only")))
-
-    def test_auto(self):
-        self.run_one("auto")
-        self.assertEqual(codex_args(self.calls("codex")[0]["argv"]),
-                         self.expected_new(codex_conf("workspace-write", auto=True)))
-
-    def test_auto_without_sandbox_is_read_only(self):
-        self.sandbox = False
-        self.run_one("auto")
-        self.assertEqual(codex_args(self.calls("codex")[0]["argv"]),
-                         self.expected_new(codex_conf("read-only")))
-
-    def test_reviewer_is_read_only(self):
-        for mode in ("work", "auto"):
-            with self.subTest(mode=mode):
-                os.remove(self.log) if os.path.exists(self.log) else None
-                self.run_one(mode, lead="claude", text="fix it")
-                self.assertEqual(codex_args(self.calls("codex")[0]["argv"]),
-                                 self.expected_new(codex_conf("read-only")))
+    def test_edit_level_is_refused(self):
+        with self.assertRaises(ValueError):
+            self.chat("edit", agents=["codex"])
 
     def test_first_prompt_carries_intro(self):
-        self.run_one("talk")
+        self.run_one("read")
         prompt = self.calls("codex")[0]["argv"][-1]
         self.assertTrue(prompt.startswith("You are Codex, a member of a group chat with a human "
                                           "user and these AI agents: Claude (Anthropic's Claude "
@@ -208,7 +188,7 @@ class CodexCommand(ChatTest):
         self.assertTrue(prompt.endswith("\n\n[User]: @codex hi"), prompt)
 
     def test_session_is_saved_then_resumed(self):
-        c = self.run_one("talk")
+        c = self.run_one("read")
         sid = c["sessions"]["codex"]
         self.assertTrue(sid.startswith("thread-"), sid)
         self.send(c, "@codex again")
@@ -220,7 +200,7 @@ class CodexCommand(ChatTest):
         self.assertEqual(argv[-1], "[User]: @codex again")  # no intro on resume
 
     def test_reply_and_stats(self):
-        c = self.run_one("talk")
+        c = self.run_one("read")
         (r,) = self.replies(c, "codex")
         self.assertEqual(r["text"], "fake codex reply")
         self.assertEqual(r["meta"]["tokens"], [20, 3])
@@ -228,7 +208,7 @@ class CodexCommand(ChatTest):
 
     def test_failure_becomes_error_reply(self):
         self.rules({"style": "codex", "exit": 2})
-        c = self.run_one("talk")
+        c = self.run_one("read")
         (r,) = self.replies(c, "codex")
         self.assertTrue(r["text"].startswith("(error)"), r["text"])
         self.assertIn("fake failure", r["text"])

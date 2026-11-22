@@ -5,14 +5,19 @@ Usage: fake_agent.py claude|codex <the real CLI's arguments...>
 It prints the same kind of JSON event stream as the real CLI, so the app's real
 adapter code parses it. Controlled by environment variables:
   FAKE_LOG    append one JSON line per run: {"style", "argv", "cwd"}
-  FAKE_RULES  JSON list of {"style"?, "if"?, "reply"?, "write"?: {path: text}, "exit"?: code};
+  FAKE_TIMES  append one JSON line per run with its start and end time (for overlap tests)
+  FAKE_RULES  JSON list of {"style"?, "if"?, "reply"?, "write"?: {path: text}, "exit"?: code,
+              "sleep"?: seconds};
               the first rule whose style matches and whose "if" text is in its arguments
               (prompt or system prompt) wins.
 """
 import json
 import os
 import sys
+import time
 import uuid
+
+started = time.time()
 
 style, argv = sys.argv[1], sys.argv[2:]
 prompt = argv[-1] if argv else ""
@@ -25,6 +30,11 @@ for r in json.loads(os.environ.get("FAKE_RULES") or "[]"):
     if r.get("style", style) == style and r.get("if", "") in "\n".join(argv):
         rule = r
         break
+if rule.get("sleep"):
+    time.sleep(rule["sleep"])
+if os.environ.get("FAKE_TIMES"):
+    with open(os.environ["FAKE_TIMES"], "a") as f:
+        f.write(json.dumps({"argv": argv, "start": started, "end": time.time()}) + "\n")
 reply = rule.get("reply", f"fake {style} reply")
 writes = rule.get("write") or {}
 for path, text in writes.items():

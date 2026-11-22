@@ -12,23 +12,32 @@ WORK_TOOLS = EDIT_TOOLS + ["Bash"]
 EDIT_NAMES = ("Edit", "MultiEdit", "Write", "NotebookEdit")
 SANDBOX = json.dumps({"sandbox": {"enabled": True, "autoAllowBashIfSandboxed": True}})
 
-# ability -> permission flags
-PERMISSIONS = {
-    "auto": ["--permission-mode", "auto"],
-    "auto-limited": ["--permission-mode", "auto"],
-    "work": ["--permission-mode", "acceptEdits", "--settings", SANDBOX,
-             "--allowedTools", *WORK_TOOLS],
-    # reviewer: auto mode minus the file-editing tools
-    "review-auto": ["--permission-mode", "auto", "--disallowedTools", *EDIT_NAMES],
-    # reviewer: sandboxed commands (tests, git diff), no edit tools
-    "review-work": ["--permission-mode", "dontAsk", "--settings", SANDBOX,
-                    "--allowedTools", *READ_TOOLS, "Bash", "--disallowedTools", *EDIT_NAMES],
-    # acceptEdits auto-approves edits only inside the working folder; anything else
-    # would need a prompt, which -p can't show, so it is denied.
-    "edit-only": ["--permission-mode", "acceptEdits", "--allowedTools", *READ_TOOLS,
-                  "--disallowedTools", "Bash"],
-    "talk": ["--permission-mode", "dontAsk", "--allowedTools", *READ_TOOLS],
-}
+# Read-only commands a "read" agent may run (Reviewer: git diff, tests).
+SAFE_BASH = ["Bash(git diff:*)", "Bash(git status:*)", "Bash(git log:*)", "Bash(git show:*)",
+             "Bash(ls:*)"]
+# Test runners execute project code, so only inside the sandbox.
+TEST_BASH = ["Bash(pytest:*)", "Bash(python -m pytest:*)", "Bash(python3 -m pytest:*)",
+             "Bash(python -m unittest:*)", "Bash(python3 -m unittest:*)", "Bash(npm test:*)",
+             "Bash(npm run test:*)", "Bash(cargo test:*)", "Bash(go test:*)"]
+
+
+def permissions(level, sandbox):
+    """Permission level -> Claude Code flags."""
+    if level == "auto":
+        return ["--permission-mode", "auto"]
+    if level == "work":  # only given when the sandbox works (see ClaudeAdapter.needs_sandbox)
+        return ["--permission-mode", "acceptEdits", "--settings", SANDBOX,
+                "--allowedTools", *WORK_TOOLS]
+    if level == "edit":
+        # acceptEdits auto-approves edits only inside the working folder; anything else
+        # would need a prompt, which -p can't show, so it is denied.
+        return ["--permission-mode", "acceptEdits", "--allowedTools", *READ_TOOLS,
+                "--disallowedTools", "Bash"]
+    if level == "read":  # read tools + read-only checks; no edit tools at all
+        return ["--permission-mode", "dontAsk", *(["--settings", SANDBOX] if sandbox else []),
+                "--allowedTools", *READ_TOOLS, *SAFE_BASH, *(TEST_BASH if sandbox else []),
+                "--disallowedTools", *EDIT_NAMES]
+    return ["--permission-mode", "dontAsk", "--tools", ""]  # talk: no tools at all
 
 
 def describe_tool(name, inp, folder):
@@ -61,18 +70,20 @@ class ClaudeAdapter(Adapter):
     color = "#c96442"
     skill_syntax = "slash"
     command = ["claude"]
+    levels = ("talk", "read", "edit", "work", "auto")
+    needs_sandbox = ("work",)
     mode_texts = {
-        "talk": TALK_TEXT,
-        "work": "WORK mode: you may edit files and run commands inside the project folder "
+        "talk": "TALK ONLY: you have no tools this turn; discuss only.",
+        "read": "READ: you may read and search files and use skills, and run read-only checks "
+                "(git diff/log/status, and the tests where allowed), but don't modify anything.",
+        "edit": "EDIT: you may edit files in the project folder but cannot run shell commands.",
+        "work": "WORK: you may edit files and run commands inside the project folder "
                 "(sandboxed).",
-        "edit-only": "LIMITED WORK mode (sandbox unavailable): you may edit files in the project "
-                     "folder but cannot run shell commands.",
-        "auto": "AUTO mode: you run in Claude Code auto mode: you may run commands and edit "
+        "auto": "AUTO: you run in Claude Code auto mode: you may run commands and edit "
                 "files where the user asks; a safety classifier blocks risky actions.",
     }
-    mode_texts["auto-limited"] = mode_texts["auto"]
 
-    def run(self, ctx, prompt, ability):
+    def run(self, ctx, prompt, level):
         sid = ctx.session
         cmd = [*self.command, "-p", "--output-format", "stream-json", "--verbose",
                "--include-partial-messages", "--append-system-prompt", ctx.system_prompt]
@@ -81,7 +92,7 @@ class ClaudeAdapter(Adapter):
         else:
             sid = str(uuid.uuid4())
             cmd += ["--session-id", sid]
-        cmd += PERMISSIONS.get(ability, PERMISSIONS["talk"])
+        cmd += permissions(level, ctx.sandbox)
         if ctx.model:
             cmd += ["--model", ctx.model]
         cmd += ["--", prompt]

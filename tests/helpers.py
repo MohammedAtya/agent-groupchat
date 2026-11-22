@@ -49,22 +49,19 @@ class ChatTest(unittest.TestCase):
     def rules(self, *rules):
         os.environ["FAKE_RULES"] = json.dumps(list(rules))
 
-    def chat(self, mode="talk", rounds=0, lead=None, agents=None):
-        """agents: e.g. ["claude", "claude", "codex"] or [{"adapter": "claude", "name": "X"}]."""
-        specs = [a if isinstance(a, dict) else {"adapter": a} for a in agents] if agents else None
-        c = srv.new_chat(self.folder, mode, rounds, "test",
-                         srv.parse_agents(specs) if specs else None)
-        c["lead"] = lead
-        return c
+    def chat(self, level=None, rounds=0, agents=None, lock=False, fix_rounds=1):
+        """agents: e.g. ["claude", "claude", "codex"] or [{"adapter": "claude", "roles": [..]}].
+        level: permission override for every agent that doesn't set its own."""
+        specs = [a if isinstance(a, dict) else {"adapter": a} for a in agents or
+                 ["claude", "codex"]]
+        if level:
+            specs = [{"level": level, **sp} for sp in specs]
+        return srv.new_chat(self.folder, rounds, "test", srv.parse_agents(specs), lock=lock,
+                            fix_rounds=fix_rounds)
 
     def send(self, c, text):
         """Post a user message exactly like the page does, then let the AIs answer."""
-        sk = srv.parse_skill(text, c["folder"])
-        msg = {"text": text, **({"skill": sk} if sk else {})}
-        want, led = srv.route(c, msg)
-        to = want + ([srv.reviewer_of(c, led)] if led else [])
-        srv.add_msg(c, "user", text, to=to, status={b: "queued" for b in to},
-                    **({"skill": sk} if sk else {}))
+        srv.post_user_message(c, text, srv.parse_skill(text, c["folder"]))
         srv.worker(c)
 
     def calls(self, style=None):

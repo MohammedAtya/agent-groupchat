@@ -13,6 +13,7 @@
             --border:#33322e; --hover:#2a2a27; }
   }
   * { box-sizing:border-box; }
+  [hidden] { display:none !important; }
   body { margin:0; background:var(--bg); color:var(--text); height:100vh; display:flex;
          font:15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
   button, input, select, textarea { font:inherit; color:inherit; }
@@ -39,7 +40,28 @@
               white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   header .folder { font-size:12px; color:var(--muted); font-family:ui-monospace, monospace; }
   header .agents { font-size:12px; color:var(--muted); }
-  header .agents b { font-weight:600; } header .agents .model { font-family:ui-monospace, monospace; font-size:11px; }
+  header .agents { display:flex; flex-wrap:wrap; gap:4px; margin-top:3px; }
+  .chip { font-size:12px; border:1px solid var(--border); border-left:3px solid var(--c, #888); border-radius:8px;
+          padding:0 7px; background:var(--bg); cursor:pointer; white-space:nowrap; }
+  .chip b { color:var(--c, #888); font-weight:600; } .chip .lv { color:var(--muted); }
+  .chip .up { color:var(--warn); font-weight:600; } .chip .lim { color:#c33; }
+  #lockBtn.on { background:#fde2e1; color:#8a1c17; border-color:#e5a3a0; }
+  #flowbar { display:flex; gap:10px; align-items:center; justify-content:center; padding:6px 16px;
+             font-size:13px; background:#eaf2ff; color:#1d3d7a; border-top:1px solid #cddcf7; }
+  #flowbar button { background:var(--user); color:#fff; border:0; border-radius:8px; padding:4px 12px;
+                    font-weight:600; cursor:pointer; }
+  @media (prefers-color-scheme: dark) { #flowbar { background:#1c2a44; color:#cfe0ff; border-color:#2c4270; } }
+  .verdict { font-size:11px; font-weight:700; margin-left:6px; }
+  .verdict.ok { color:#1a7f37; } .verdict.fix { color:#c33; }
+  /* team dialog */
+  #team table { width:100%; border-collapse:collapse; font-size:13px; }
+  #team td { padding:6px 4px; border-bottom:1px solid var(--border); vertical-align:top; }
+  #team .roles label { display:inline-flex; gap:3px; align-items:center; margin:0 8px 2px 0; color:var(--text);
+                       font-size:12px; }
+  #team .roles input { width:auto; margin:0; }
+  #team select { width:100%; padding:4px 6px; }
+  #team .note { font-size:11px; color:var(--muted); margin-top:3px; }
+  #team .note.up { color:var(--warn); } #team .note.lim { color:#c33; }
   .ctl { font-size:13px; color:var(--muted); display:flex; align-items:center; gap:6px; }
   .ctl select, .small { background:var(--bg); border:1px solid var(--border); border-radius:6px;
                         padding:3px 6px; font-size:13px; cursor:pointer; }
@@ -128,7 +150,7 @@
   .resume { font-size:12px; color:var(--muted); text-align:center; font-family:ui-monospace, monospace; }
   /* dialog */
   dialog { border:1px solid var(--border); border-radius:12px; background:var(--panel);
-           color:var(--text); width:min(560px, calc(100vw - 32px)); padding:20px; }
+           color:var(--text); width:min(660px, calc(100vw - 32px)); padding:20px; }
   dialog::backdrop { background:rgba(0,0,0,.4); }
   dialog h2 { margin:0 0 14px; font-size:17px; }
   dialog label { display:block; font-size:13px; color:var(--muted); margin:12px 0 4px; }
@@ -136,7 +158,10 @@
                                 border:1px solid var(--border); background:var(--bg); }
   dialog .hint { font-size:12px; color:var(--muted); margin-top:4px; }
   .agentRow { display:flex; gap:6px; margin-bottom:6px; }
-  dialog .agentRow select { width:auto; flex:0 0 130px; } dialog .agentRow input { width:auto; flex:1; min-width:0; }
+  dialog .agentRow select { width:auto; flex:0 0 110px; } dialog .agentRow input { width:auto; flex:1; min-width:0; }
+  dialog .agentRow select.rl { flex:0 0 120px; }
+  dialog label.check { display:flex; gap:6px; align-items:center; color:var(--text); }
+  dialog label.check input { width:auto; }
   .agentRow button, #addAgent { padding:0 10px; border-radius:8px; border:1px solid var(--border);
                                 background:var(--bg); cursor:pointer; }
   #addAgent { padding:5px 10px; font-size:13px; }
@@ -160,15 +185,15 @@
       <div class="folder" id="folder"></div>
       <div class="agents" id="agents"></div>
     </div>
-    <span class="ctl">Mode
-      <select id="mode"><option value="talk">Talk only</option><option value="work">Can work</option><option value="auto">Auto</option></select>
-    </span>
+    <button class="small" id="teamBtn" title="Roles and permissions of the agents in this chat">Team</button>
+    <button class="small" id="lockBtn" title="Talk-only lock: every agent may only talk (no files, no commands)">🔓 Lock</button>
     <span class="ctl">Discussion
       <select id="rounds"><option value="0">Off</option><option value="1">1 round</option>
         <option value="2">2 rounds</option><option value="3">3 rounds</option></select>
     </span>
-    <span class="ctl" title="Lead + Review: the lead does the work, then the next agent reviews it (read-only). @mention to ask any agent directly.">Lead
-      <select id="lead"><option value="">Off</option></select>
+    <span class="ctl" id="fixCtl" title="If the Tester or Reviewer finds problems, the Lead fixes them automatically this many times before it comes back to you">Fix rounds
+      <select id="fixRounds"><option value="0">0</option><option value="1">1</option>
+        <option value="2">2</option><option value="3">3</option></select>
     </span>
     <button class="small" id="compact" title="Summarize this chat and continue in fresh sessions from the summary (cheaper replies)">Compact</button>
     <button class="small" id="export" title="Download this chat as Markdown">Export</button>
@@ -183,6 +208,7 @@
   </div>
   <div id="log"><div class="inner" id="inner"><div class="empty">Pick a chat on the left, or start a new one.</div></div></div>
   <div id="typing"></div>
+  <div id="flowbar" hidden><span id="flowtext"></span><button id="goBtn" type="button">▶ Go ahead</button></div>
   <div id="composer">
   <div id="menu" hidden></div>
   <div id="to" style="font-size:12px;color:var(--muted);padding:0 16px 4px"></div>
@@ -205,13 +231,10 @@
     <div id="nAgents"></div>
     <button type="button" id="addAgent">+ Add agent</button>
     <div class="hint">Add several copies of the same AI if you like: each one is its own session. An empty name
-      becomes "Claude", or "Claude 1", "Claude 2"… for copies. An empty model uses the CLI's default.</div>
-    <label for="nMode">Mode</label>
-    <select id="nMode">
-      <option value="talk">Talk only: read files and use skills, no changes</option>
-      <option value="work">Can work: edit files and run commands, sandboxed to the folder</option>
-      <option value="auto">Auto: every agent works like auto mode in the terminal, with safety review</option>
-    </select>
+      becomes "Claude", or "Claude 1", "Claude 2"… for copies. An empty model uses the CLI's default.
+      Each role comes with a default permission; change permissions later under <b>Team</b>.
+      Roles act in order: Planner + Critic → your OK → Lead → Tester → Reviewer.</div>
+    <label class="check"><input type="checkbox" id="nLock"> Start with the 🔒 Talk-only lock (nobody touches files)</label>
     <label for="nRounds">Let the agents reply to each other</label>
     <select id="nRounds"><option value="0">Off</option><option value="1" selected>1 round</option>
       <option value="2">2 rounds</option><option value="3">3 rounds</option></select>
@@ -223,14 +246,29 @@
   </form>
 </dialog>
 
+<dialog id="team">
+  <form method="dialog">
+    <h2>Team: roles and permissions</h2>
+    <table><tbody id="teamRows"></tbody></table>
+    <div class="hint">An agent can hold several roles; it gets the highest default permission of them.
+      Greyed-out permissions can't be enforced for that AI. ⚠ = raised above its role's default.</div>
+    <div id="teamErr" style="color:#d33;font-size:13px;margin-top:8px"></div>
+    <div class="row">
+      <button value="cancel" formnovalidate>Cancel</button>
+      <button class="go" id="teamSave" value="default">Save</button>
+    </div>
+  </form>
+</dialog>
+
 <script>
 const $ = id => document.getElementById(id);
 // The open chat's agents ([{id, adapter, name, model}]) and lookups built from them.
 let names = {user:'You'}, colors = {}, aliasMap = {}, agentList = [];
 let adapters = [], adapterNames = {}, adapterColors = {};  // every AI the server knows
+let roles = [], roleNames = {}, levelNames = {}, perm = {}, chat = null, sandbox = true;
 const colorOf = id => colors[id] || '#888';
 const agentOf = id => agentList.find(a => a.id === id) || {};
-let current = null, lastSig = '', home = '', lead = '', lastScrolled = false, stopping = false;
+let current = null, lastSig = '', home = '', lastScrolled = false, stopping = false;
 
 const TOKEN = '__GC_TOKEN__';  // filled in by server.py; changes on every server launch
 async function api(path, body) {
@@ -248,23 +286,33 @@ function listNames(ids) {
   const n = ids.map(b => names[b] || b);
   return n.length > 2 ? n.slice(0, -1).join(', ') + ' and ' + n[n.length - 1] : n.join(' and ');
 }
-function showAgents() {
+const roleText = a => (a.roles || []).map(r => roleNames[r] || r).join(' + ') || 'Participant';
+function showAgents() {  // one chip per agent: name · role(s) · permission (⚠ raised / limited)
   const box = $('agents'); box.textContent = '';
-  agentList.forEach((a, i) => {
-    if (i) box.append(' · ');
-    const b = document.createElement('b'); b.style.color = colorOf(a.id); b.textContent = a.name;
-    b.title = `@${a.id}` + (a.model ? ` · model ${a.model}` : ''); box.append(b);
-    if (a.model) { const m = document.createElement('span'); m.className = 'model'; m.textContent = ` (${a.model})`; box.append(m); }
-  });
+  for (const a of agentList) {
+    const p = perm[a.id] || {}, chip = document.createElement('span');
+    chip.className = 'chip'; chip.style.setProperty('--c', colorOf(a.id));
+    const b = document.createElement('b'); b.textContent = a.name;
+    const lv = document.createElement('span'); lv.className = 'lv';
+    lv.textContent = ` · ${roleText(a)} · ${levelNames[p.level] || p.level || ''}`;
+    chip.append(b, lv);
+    if (p.raised && !p.locked) { const u = document.createElement('span'); u.className = 'up'; u.textContent = ' ⚠'; chip.append(u); }
+    if (p.limited && !p.locked) { const l = document.createElement('span'); l.className = 'lim'; l.textContent = ' (limited)'; chip.append(l); }
+    chip.title = `@${a.id}` + (a.model ? ` · model ${a.model}` : '') +
+      (p.raised ? `\n⚠ raised above its role's default (${levelNames[p.default]})` : '') +
+      (p.limited ? `\nWould have ${levelNames[p.requested]}, but it ${p.limited}.` : '') +
+      (p.locked ? '\n🔒 Talk-only lock is on' : '') + '\nClick to change roles and permissions';
+    chip.onclick = openTeam;
+    box.append(chip);
+  }
 }
-function fillLead() {  // "Claude 1 works, Claude 2 reviews" for each agent that has someone after it
-  const opts = [['', 'Off']].concat(agentList.length > 1 ? agentList.map((a, i) =>
-    [a.id, `${a.name} works, ${agentList[(i + 1) % agentList.length].name} reviews`]) : []);
-  const key = JSON.stringify(opts), sel = $('lead');
-  if (sel.dataset.key === key) return;
-  sel.textContent = '';
-  for (const [v, t] of opts) { const o = document.createElement('option'); o.value = v; o.textContent = t; sel.append(o); }
-  sel.dataset.key = key;
+function showFlow() {
+  const f = chat && chat.flow, wait = !!(f && f.waiting);
+  $('flowbar').hidden = !wait;
+  if (wait) {
+    const planners = agentList.filter(a => (a.roles || []).includes('planner')).map(a => a.id);
+    $('flowtext').textContent = `⏸️ ${listNames(planners) || 'The Planner'} proposed a plan. Read it, then go ahead, or reply to change it.`;
+  }
 }
 
 function ago(ts) {
@@ -282,14 +330,17 @@ async function loadList() {
   home = d.home;
   adapters = d.adapters || [];
   adapters.forEach(a => { adapterNames[a.id] = a.name; adapterColors[a.id] = a.color; });
-  $('warn').hidden = d.sandbox || !current || $('mode').value === 'talk';
+  roles = d.roles || []; roles.forEach(r => { roleNames[r.id] = r.name; });
+  (d.levels || []).forEach(l => { levelNames[l.id] = l.name; });
+  sandbox = d.sandbox;
+  $('warn').hidden = d.sandbox || !current || !Object.values(perm).some(p => p.limited && !p.locked);
   const list = $('list'); list.innerHTML = '';
   for (const c of d.chats) {
     const el = document.createElement('div');
     el.className = 'item' + (c.id === current ? ' active' : '');
     const t = document.createElement('div'); t.className = 't'; t.textContent = c.title;
     const s = document.createElement('div'); s.className = 's';
-    s.innerHTML = `<span class="badge ${c.mode === 'talk' ? '' : 'work'}">${c.mode}</span> `;
+    s.innerHTML = `<span class="badge ${c.lock ? '' : 'work'}">${c.lock ? '🔒 locked' : c.agents + ' agents'}</span> `;
     s.append(ago(c.updated) + ' · ' + c.folder.replace(home, '~'));
     el.append(t, s);
     el.onclick = () => openChat(c.id);
@@ -315,12 +366,14 @@ async function refresh() {
   if (c.error) { current = null; return; }
   $('title').textContent = c.title;
   $('folder').textContent = c.folder;
-  agentList = c.agents || []; colors = c.colors || {}; aliasMap = c.aliases || {};
+  chat = c; agentList = c.agents || []; colors = c.colors || {}; aliasMap = c.aliases || {};
+  perm = c.perm || {};
   names = {user:'You'}; agentList.forEach(a => { names[a.id] = a.name; });
-  showAgents(); fillLead();
-  $('mode').value = c.mode; $('rounds').value = String(c.rounds); $('lead').value = c.lead || '';
-  lead = c.lead || '';
-  const sig = c.messages.length + '|' + JSON.stringify(c.sessions) + '|' +
+  showAgents(); showFlow();
+  $('rounds').value = String(c.rounds); $('fixRounds').value = String(c.fix_rounds ?? 1);
+  $('fixCtl').hidden = !agentList.some(a => (a.roles || []).includes('lead'));
+  $('lockBtn').textContent = c.lock ? '🔒 Locked' : '🔓 Lock'; $('lockBtn').classList.toggle('on', !!c.lock);
+  const sig = c.messages.length + '|' + JSON.stringify(c.sessions) + '|' + JSON.stringify(c.flow) + '|' +
     JSON.stringify(c.messages.map(m => [m.status, m.retried]));
   if (sig !== lastSig) {
     lastSig = sig;
@@ -339,7 +392,11 @@ async function refresh() {
       if (m.who !== 'user') d.style.setProperty('--c', colorOf(m.who));
       const w = document.createElement('div'); w.className = 'who';
       w.textContent = summary ? `📋 Chat summary (by ${names[m.who] || m.who}): fresh sessions continue from here`
-        : (names[m.who] || m.who) + (meta.role === 'review' ? ' · review' : '') + (m.retried ? ' · retried' : '');
+        : (names[m.who] || m.who) + (meta.role ? ' · ' + meta.role : '') + (m.retried ? ' · retried' : '');
+      if (meta.verdict) {
+        const v = document.createElement('span'); v.className = 'verdict ' + (meta.verdict === 'LGTM' ? 'ok' : 'fix');
+        v.textContent = meta.verdict === 'LGTM' ? '✓ LGTM' : '✗ needs fixes'; w.append(v);
+      }
       const b = document.createElement('div');
       if (m.who === 'user') b.textContent = m.text;          // your messages stay plain text
       else { b.className = 'md'; b.innerHTML = md(m.text); } // AI replies: Markdown
@@ -449,6 +506,7 @@ $('inner').addEventListener('click', async e => {
 function dur(s) { s = Math.max(0, Math.round(s)); return s < 60 ? s + 's' : Math.floor(s/60) + 'm' + String(s%60).padStart(2,'0') + 's'; }
 function kfmt(n) { return n >= 1000 ? (n/1000).toFixed(n >= 10000 ? 0 : 1) + 'k' : String(n); }
 const ST = {queued: '⏳ queued', running: '● working…', done: '✓', passed: '– had nothing to add',
+            waiting: '⏸️ waits for your OK',
             error: '✗ error', stopped: '■ stopped', 'timed out': '⏱ timed out', skipped: '– skipped'};
 function statusLine(status) {
   const x = document.createElement('div'); x.className = 'status';
@@ -565,17 +623,32 @@ function skillOf(text) {
 }
 const tag = ad => `<b style="background:${adapterColors[ad] || '#888'}">${esc(adapterNames[ad] || ad)}</b>`;
 
+const STAGE_ROLES = {plan: ['planner', 'critic'], work: ['lead'], test: ['tester'], review: ['reviewer']};
+const inStage = st => agentList.filter(a => (a.roles || []).some(r => STAGE_ROLES[st].includes(r))).map(a => a.id);
+function flowText(nm) {  // "Claude 1 plans → ⏸ your OK → Claude 2 works → Codex reviews"
+  const parts = [], words = {plan: 'plan', work: 'works', test: 'tests', review: 'reviews'};
+  for (const st of ['plan', 'work', 'test', 'review']) {
+    const ids = inStage(st); if (!ids.length) continue;
+    parts.push(ids.map(nm).join(' + ') + ' ' + (st === 'plan' ? (ids.length > 1 ? 'plan' : 'plans') : words[st]));
+    if (st === 'plan' && agentList.some(a => (a.roles || []).includes('planner'))) parts.push('⏸ your OK');
+  }
+  return parts.join(' → ');
+}
 function updateTo() {
   const text = $('t').value, m = mentioned(text), sk = skillOf(text), ids = agentList.map(a => a.id);
   const has = b => sk.adapters.includes(agentOf(b).adapter);
-  const who = m.length ? m : sk ? ids.filter(has) : lead ? [lead] : ids;
+  const flowIds = new Set(Object.keys(STAGE_ROLES).flatMap(inStage));
+  const parts = ids.filter(b => !flowIds.has(b));
+  const flow = !m.length && !sk && flowIds.size;
+  const who = m.length ? m : sk ? ids.filter(has) : flow ? parts : ids;
   const nm = b => `<b style="color:${colorOf(b)}">${esc(names[b] || b)}</b>`;
   const list = who.length > 2 ? who.slice(0, -1).map(nm).join(', ') + ' and ' + nm(who[who.length - 1])
                               : who.map(nm).join(' and ');
-  const rev = lead ? ids[(ids.indexOf(lead) + 1) % ids.length] : null;
+  const waiting = chat && chat.flow && chat.flow.waiting;
   $('to').innerHTML = !text.trim() ? '' :
     (sk ? `→ runs <b>/${esc(sk.name)}</b> on ${list}` :
-     lead && !m.length ? `→ ${list} works on it, then ${nm(rev)} reviews (read-only)` :
+     flow && waiting ? `→ back to ${inStage('plan').map(nm).join(' + ')} to change the plan` :
+     flow ? `→ ${who.length ? list + ' ' + (who.length > 1 ? 'answer' : 'answers') + ', then ' : ''}${flowText(nm)}` :
      `→ ${who.length === 1 && ids.length > 1 ? 'only ' : ''}${list} will reply`) +
     (sk && m.some(b => !has(b)) ? ` <span style="color:var(--warn)">(${esc(listNames(m.filter(b => !has(b))))} doesn't have this skill)</span>` : '');
 }
@@ -629,19 +702,68 @@ $('t').addEventListener('keydown', e => {
 $('t').addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('f').requestSubmit(); }
 });
-$('mode').onchange = async () => {
-  const asks = {
-    work: 'Let the agents edit files and run commands in this folder without asking?',
-    auto: 'Auto mode: the agents can run commands, use the internet and edit files where ' +
-          'you ask, without asking you. Their automatic safety reviewers approve normal actions ' +
-          'and block risky ones, like auto mode in the terminal. Continue?'};
-  if (asks[$('mode').value] && !confirm(asks[$('mode').value])) {
-    $('mode').value = 'talk'; return;
-  }
-  await api(`/api/chats/${current}/settings`, {mode: $('mode').value}); refresh(); loadList();
+$('lockBtn').onclick = async () => {
+  await api(`/api/chats/${current}/settings`, {lock: !(chat && chat.lock)}); lastSig = ''; refresh(); loadList();
 };
-$('lead').onchange = async () => {
-  await api(`/api/chats/${current}/settings`, {lead: $('lead').value}); lead = $('lead').value; updateTo();
+$('fixRounds').onchange = () => api(`/api/chats/${current}/settings`, {fix_rounds: +$('fixRounds').value});
+$('goBtn').onclick = async () => {
+  const r = await api(`/api/chats/${current}/go`, {}); if (r.error) alert(r.error); refresh();
+};
+
+// ---- Team dialog: roles (several per agent) + permission override per agent
+function openTeam() {
+  if (!chat) return;
+  const rows = $('teamRows'); rows.textContent = ''; $('teamErr').textContent = '';
+  for (const a of agentList) {
+    const p = perm[a.id] || {}, tr = document.createElement('tr'); tr.dataset.id = a.id;
+    const n = document.createElement('td'); n.style.width = '22%';
+    const b = document.createElement('b'); b.style.color = colorOf(a.id); b.textContent = a.name; n.append(b);
+    const rc = document.createElement('td'); rc.className = 'roles';
+    for (const r of roles.filter(r => r.id !== 'participant')) {
+      const l = document.createElement('label'), cb = document.createElement('input');
+      cb.type = 'checkbox'; cb.value = r.id; cb.checked = (a.roles || []).includes(r.id);
+      l.title = r.job || ''; l.append(cb, r.name); rc.append(l);
+    }
+    const pc = document.createElement('td'); pc.style.width = '34%';
+    const sel = document.createElement('select');
+    const def = document.createElement('option'); def.value = ''; sel.append(def);
+    for (const lv of Object.keys(levelNames)) {
+      const o = document.createElement('option'), why = (p.choices || {})[lv];
+      o.value = lv; o.textContent = levelNames[lv] + (why ? ' (not possible)' : '');
+      o.disabled = !!why; o.title = why || ''; sel.append(o);
+    }
+    sel.value = a.level || '';
+    const note = document.createElement('div'); note.className = 'note';
+    const update = () => {  // default follows the checked roles; explain raised / limited
+      const checked = [...rc.querySelectorAll('input:checked')].map(x => x.value);
+      const order = Object.keys(levelNames), rs = checked.length ? checked : ['participant'];
+      const d = rs.map(r => (roles.find(x => x.id === r) || {}).level || 'talk')
+                  .reduce((x, y) => order.indexOf(x) > order.indexOf(y) ? x : y);
+      def.textContent = `Default: ${levelNames[d]}`;
+      const raised = sel.value && order.indexOf(sel.value) > order.indexOf(d);
+      note.className = 'note' + (raised ? ' up' : p.limited ? ' lim' : '');
+      note.textContent = raised ? `⚠ raised above the default (${levelNames[d]})` :
+        p.limited ? `Limited right now: it ${p.limited}.` : '';
+    };
+    rc.onchange = update; sel.onchange = update; update();
+    pc.append(sel, note);
+    tr.append(n, rc, pc); rows.append(tr);
+  }
+  $('team').showModal();
+}
+$('teamBtn').onclick = openTeam;
+$('teamSave').onclick = async e => {
+  e.preventDefault();
+  const agents = [...$('teamRows').children].map(tr => ({id: tr.dataset.id,
+    roles: [...tr.querySelectorAll('.roles input:checked')].map(x => x.value),
+    level: tr.querySelector('select').value || null}));
+  const newAuto = agents.filter(a => a.level === 'auto' && (agentOf(a.id).level !== 'auto'));
+  if (newAuto.length && !confirm(`Auto for ${listNames(newAuto.map(a => a.id))}: it can run commands, ` +
+      'use the internet and edit files where you ask, without asking you. Its automatic safety ' +
+      'reviewer approves normal actions and blocks risky ones, like auto mode in the terminal. Continue?')) return;
+  const r = await api(`/api/chats/${current}/agents`, {agents});
+  if (r.error) { $('teamErr').textContent = r.error; return; }
+  $('team').close(); lastSig = ''; refresh();
 };
 $('compact').onclick = async () => {
   if (!confirm(`Compact: ${(agentList[0] || {}).name || 'the first agent'} summarizes this chat, then every agent continues in a fresh session ` +
@@ -671,9 +793,15 @@ function agentRow(spec = {}) {
   sel.value = spec.adapter || (adapters[0] || {}).id;
   const nm = document.createElement('input'); nm.className = 'nm'; nm.placeholder = 'Name (optional)'; nm.maxLength = 40;
   const md = document.createElement('input'); md.className = 'md'; md.placeholder = 'Model (optional)'; md.maxLength = 80;
+  const rl = document.createElement('select'); rl.className = 'rl'; rl.title = 'Role (more roles under Team)';
+  for (const r of roles) {
+    const o = document.createElement('option'); o.value = r.id; o.title = r.job || '';
+    o.textContent = `${r.name} · ${levelNames[r.level] || r.level}`; rl.append(o);
+  }
+  rl.value = spec.role || 'participant';
   const rm = document.createElement('button'); rm.type = 'button'; rm.textContent = '✕'; rm.title = 'Remove this agent';
   rm.onclick = () => { if ($('nAgents').children.length > 1) row.remove(); };
-  row.append(sel, nm, md, rm); $('nAgents').append(row);
+  row.append(sel, nm, md, rl, rm); $('nAgents').append(row);
 }
 $('addAgent').onclick = () => {
   const rows = $('nAgents').querySelectorAll('.ad');
@@ -681,7 +809,7 @@ $('addAgent').onclick = () => {
 };
 $('newBtn').onclick = () => {
   $('nTitle').value = ''; $('nFolder').value = home || '~'; $('err').textContent = '';
-  $('nAgents').textContent = '';
+  $('nAgents').textContent = ''; $('nLock').checked = false;
   for (const id of ['claude', 'codex'].filter(id => adapterNames[id])) agentRow({adapter: id});
   if (!$('nAgents').children.length) agentRow();
   $('dlg').showModal(); $('nFolder').focus();
@@ -691,9 +819,10 @@ $('create').onclick = async e => {
   let r;
   try {
     const agents = [...$('nAgents').children].map(r => ({adapter: r.querySelector('.ad').value,
-      name: r.querySelector('.nm').value.trim(), model: r.querySelector('.md').value.trim()}));
+      name: r.querySelector('.nm').value.trim(), model: r.querySelector('.md').value.trim(),
+      roles: [r.querySelector('.rl').value].filter(x => x !== 'participant')}));
     r = await api('/api/chats', {title: $('nTitle').value, folder: $('nFolder').value,
-                                 mode: $('nMode').value, rounds: +$('nRounds').value, agents});
+                                 lock: $('nLock').checked, rounds: +$('nRounds').value, agents});
   } catch (err) {
     $('err').textContent = "The chat server isn't running. Start it with `python3 -m agent_groupchat` in the project folder, then try again.";
     return;

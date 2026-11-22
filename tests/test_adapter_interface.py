@@ -57,7 +57,7 @@ class StandaloneAdapters(unittest.TestCase):
                 self.assertEqual(adapter.id, bot)
                 self.assertTrue(adapter.name and adapter.kind)
                 self.assertRegex(adapter.color, r"^#[0-9a-f]{6}$")
-                self.assertIn("TALK mode", adapter.mode_text("talk"))
+                self.assertIn("TALK ONLY", adapter.mode_text("talk"))
                 self.assertIn("abc", adapter.resume_hint("abc"))
                 self.assertIn(adapter.skill_syntax, ("slash", "dollar"))
 

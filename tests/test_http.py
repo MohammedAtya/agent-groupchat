@@ -96,12 +96,37 @@ class Http(ChatTest):
             self.assertEqual(code, 400, agents)
             self.assertIn("error", json.loads(body))
 
-    def test_lead_needs_a_reviewer(self):
-        code, body = self.req("POST", "/api/chats", {"folder": self.folder,
-                                                     "agents": [{"adapter": "claude"}]})
+    def test_roles_and_permissions_api(self):
+        code, body = self.req("POST", "/api/chats", {"folder": self.folder, "agents": [
+            {"adapter": "claude", "roles": ["lead"]}, {"adapter": "codex", "roles": ["reviewer"]}]})
+        self.assertEqual(code, 200, body)
         cid = json.loads(body)["id"]
-        self.req("POST", f"/api/chats/{cid}/settings", {"lead": "claude"})
-        self.assertIsNone(srv.chats[cid].get("lead"))  # nobody to review: Lead + Review stays off
+        chat = json.loads(self.req("GET", f"/api/chats/{cid}")[1])
+        self.assertEqual(chat["perm"]["claude"]["default"], "work")
+        self.assertEqual(chat["perm"]["codex"]["level"], "read")
+        self.assertIn("edit", chat["perm"]["codex"]["choices"])
+        self.assertTrue(chat["perm"]["codex"]["choices"]["edit"])  # greyed out, with a reason
+        # raise the Reviewer to work: allowed, and flagged as raised
+        code, _ = self.req("POST", f"/api/chats/{cid}/agents", {"agents": [
+            {"id": "codex", "roles": ["reviewer"], "level": "work"}]})
+        self.assertEqual(code, 200)
+        self.assertTrue(srv.level_info(srv.chats[cid], "codex")["raised"])
+        # the same agent can't be Lead and Reviewer
+        code, body = self.req("POST", f"/api/chats/{cid}/agents", {"agents": [
+            {"id": "claude", "roles": ["lead", "reviewer"]}]})
+        self.assertEqual(code, 400)
+        self.assertIn("review its own work", json.loads(body)["error"])
+        # Codex can't do "edit"
+        code, _ = self.req("POST", f"/api/chats/{cid}/agents", {"agents": [
+            {"id": "codex", "roles": [], "level": "edit"}]})
+        self.assertEqual(code, 400)
+        # lock + fix rounds
+        self.req("POST", f"/api/chats/{cid}/settings", {"lock": True, "fix_rounds": 9})
+        self.assertEqual(srv.chats[cid]["fix_rounds"], srv.MAX_FIX_ROUNDS)
+        self.assertEqual(srv.level_of(srv.chats[cid], "claude"), "talk")
+        listing = json.loads(self.req("GET", "/api/chats")[1])
+        self.assertIn("planner", [r["id"] for r in listing["roles"]])
+        self.assertEqual(self.req("POST", f"/api/chats/{cid}/go", {})[0], 409)  # nothing waits
         self.req("POST", f"/api/chats/{cid}/delete", {})
 
 

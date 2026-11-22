@@ -85,44 +85,6 @@ class Handoffs(ChatTest):
         self.assertEqual(len(self.calls("codex")), 1)
 
 
-class LeadReview(ChatTest):
-    def test_lead_works_then_other_reviews(self):
-        c = self.chat("work", lead="claude")
-        self.send(c, "build it")
-        self.assertEqual([m["who"] for m in self.replies(c)], ["claude", "codex"])
-        lead_prompt = self.calls("claude")[0]["argv"][-1]
-        self.assertIn("(Lead + Review: you are the lead", lead_prompt)
-        self.assertIn("then Codex reviews it", lead_prompt)
-        review_prompt = self.calls("codex")[0]["argv"][-1]
-        self.assertIn("(Review turn: Claude is the lead", review_prompt)
-        self.assertEqual(self.replies(c, "codex")[0]["meta"]["role"], "review")
-        self.assertEqual(c["messages"][0]["to"], ["claude", "codex"])
-
-    def test_review_lists_changed_files(self):
-        self.rules({"style": "claude", "write": {"app.py": "print(1)\n"}})
-        c = self.chat("work", lead="claude")
-        self.send(c, "build it")
-        self.assertIn("(files changed: app.py)", self.calls("codex")[0]["argv"][-1])
-
-    def test_reviewer_that_edits_is_flagged(self):
-        self.rules({"style": "claude", "write": {"sneaky.txt": "x\n"}})
-        c = self.chat("work", lead="codex")
-        self.send(c, "build it")
-        self.assertEqual(self.replies(c, "claude")[0]["meta"]["warn"], "the reviewer changed files")
-
-    def test_no_review_after_failed_lead(self):
-        self.rules({"style": "claude", "exit": 1})
-        c = self.chat("work", lead="claude")
-        self.send(c, "build it")
-        self.assertEqual(self.calls("codex"), [])
-        self.assertEqual(c["messages"][0]["status"]["codex"], "skipped")
-
-    def test_mention_bypasses_lead(self):
-        c = self.chat("work", lead="claude")
-        self.send(c, "@codex quick question")
-        self.assertEqual([m["who"] for m in self.replies(c)], ["codex"])
-
-
 class Skills(ChatTest):
     def make_skill(self, base, name):
         d = os.path.join(self.folder, base, "skills", name)

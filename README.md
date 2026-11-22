@@ -19,16 +19,21 @@ Start it with:  `python3 -m agent_groupchat`  (from this folder)  →  http://12
 - **Live progress + Stop**: while they work you see what each one is doing (`✏️ editing server.py`,
   `$ pytest`) and for how long. **■ Stop** kills the running replies and the rest of that turn;
   the sessions stay resumable.
-- **Lead + Review** (header → Lead): your messages go to the lead, which does the work; then the
-  next agent in the list reviews it **read-only** and says what to fix (or LGTM). You decide
-  what's next. `@name` still asks any agent directly.
+- **Roles** (header → **Team**, or when creating the chat): Planner, Critic, Lead, Tester, Reviewer,
+  Participant (no special job), plus your own roles in `~/.agent-groupchat/config.json`. A plain
+  message runs them in order: **Planner + Critic → ⏸️ your OK → Lead → Tester → Reviewer**. Roles
+  nobody holds are skipped; agents without a role answer directly, as before. Reply while the plan
+  waits to change it, or press **▶ Go ahead**.
+- **Fix rounds**: if the Tester or Reviewer ends with `VERDICT: FIX`, the Lead fixes it automatically
+  (0–3 rounds, default 1), then it comes back to you.
 - **Reply stats**: under each reply, how long it took, cost (≈$, Claude), tokens, and files changed.
   **▸ Diff** shows exactly what that reply changed (also edits made with shell commands).
 - **Live preview**: the reply appears while it's being written (Claude word by word, Codex per message).
 - **Status + Retry**: under your messages you see who got it and whether it's queued, working,
   done or failed. A failed / stopped reply has **↻ Retry**; **↩ Reply** writes to that AI only.
-- **Lead + Review reviewer** can read files and run read-only checks (tests, `git diff`) but has no
-  file-editing tools; if it changes files anyway, its reply is flagged ⚠.
+- **Read-only roles** (Planner, Critic, Reviewer) can read files and run read-only checks (tests,
+  `git diff`) but get no file-editing tools; if one changes files anyway, its reply is flagged ⚠.
+  So is a Tester that changes non-test files.
 - **Compact**: the first agent summarizes the chat, then all continue in fresh sessions from the summary,
   so long chats get cheaper again. The old sessions stay resumable from the terminal.
 - **Markdown**: replies render headings, lists, tables, links and code blocks with a Copy button.
@@ -42,13 +47,22 @@ Start it with:  `python3 -m agent_groupchat`  (from this folder)  →  http://12
 - Chats are saved in `~/.agent-groupchat/chats/` (override with `AGENT_GROUPCHAT_HOME`). Deleting a chat on the page doesn't delete the
   agents' sessions themselves.
 
-## Modes
-| Mode | Claude | Codex |
+## Roles and permissions
+Each role has a default permission; under **Team** you can raise or lower it per agent (⚠ = raised).
+An agent with two roles gets the higher default. **🔒 Lock** drops every agent to *Talk only* at once.
+The same agent can't be Lead and Reviewer (two copies of one AI can).
+
+| Permission | Claude Code | Codex |
 |---|---|---|
-| Talk only | read, search, web, skills | read-only sandbox |
-| Can work  | edit files + run commands, sandboxed to the folder | `workspace-write` sandbox |
-| Can work, without a sandbox | edit files in the folder, **no** commands | read-only |
-| Auto | Claude Code auto mode: commands + edits anywhere, risky actions blocked by the classifier | "approve for me": sandboxed to the folder, and when blocked (internet, other folders) its automatic reviewer approves or denies |
+| Talk only | no tools at all | read-only sandbox (can't hide files from Codex), told to only discuss |
+| Read | read/search tools, skills, `git diff/log/status`, tests (in the sandbox) | read-only sandbox |
+| Edit files | edit tools in the folder, **no** commands | not possible (no such setting) |
+| Edit + run commands | edits + commands, sandboxed to the folder | `workspace-write` sandbox |
+| Auto | Claude Code auto mode: risky actions blocked by the classifier | "approve for me": sandboxed, and its automatic reviewer approves or denies anything blocked |
+
+Defaults: Planner, Critic, Reviewer → Read; Lead, Tester, Participant → Edit + run commands.
+A permission an AI can't enforce is greyed out. Without a working sandbox, "Edit + run commands"
+drops to "Edit files" (Claude) or "Read" (Codex), and the agent's chip says *(limited)*.
 
 ## One-time fix: enable the sandbox (Ubuntu 23.10+ / 24.04)
 Both CLIs confine commands with `bubblewrap`, but Ubuntu's AppArmor blocks it

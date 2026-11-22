@@ -44,7 +44,8 @@ class Naming(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     srv.parse_agents(bad)
         ok = srv.parse_agents([{"adapter": "claude", "name": " Claude Lead ", "model": "opus"}])
-        self.assertEqual(ok, [{"adapter": "claude", "name": "Claude Lead", "model": "opus"}])
+        self.assertEqual(ok, [{"adapter": "claude", "name": "Claude Lead", "model": "opus",
+                               "roles": [], "level": None}])
 
 
 class ThreeAgents(ChatTest):
@@ -67,7 +68,7 @@ class ThreeAgents(ChatTest):
         a = call["argv"]
         intro = a[a.index("--append-system-prompt") + 1]
         self.assertIn("You are Claude 1,", intro)
-        self.assertIn("Claude 2 (Anthropic's Claude Code, a separate session of the same AI as you)",
+        self.assertIn("Claude 2 (Anthropic's Claude Code; a separate session of the same AI as you)",
                       intro)
         self.assertIn("Codex (OpenAI's coding agent)", intro)
         self.assertIn("([Claude 2], [Codex])", intro)
@@ -108,17 +109,12 @@ class ThreeAgents(ChatTest):
         notes = [caller(r) or r["style"] for r in self.calls() if "(Discussion round" in r["argv"][-1]]
         self.assertEqual(notes, ["Claude 1", "Claude 2", "codex"])  # resumed Codex: no intro
 
-    def test_lead_is_reviewed_by_the_next_agent(self):
-        c = self.make(mode="work", lead="claude-2")
+    def test_two_copies_can_be_lead_and_reviewer(self):
+        c = self.chat(level="work", agents=[{"adapter": "claude", "roles": ["lead"]},
+                                            {"adapter": "claude", "roles": ["reviewer"]},
+                                            "codex"])
         self.send(c, "build it")
-        self.assertEqual([m["who"] for m in self.replies(c)], ["claude-2", "codex"])
-        self.assertIn("then Codex reviews it", self.calls()[0]["argv"][-1])
-        self.assertEqual(c["messages"][0]["to"], ["claude-2", "codex"])
-
-    def test_reviewer_wraps_around(self):
-        c = self.make()
-        self.assertEqual(srv.reviewer_of(c, "codex"), "claude-1")
-        self.assertIsNone(srv.reviewer_of(c, "nobody"))
+        self.assertEqual([m["who"] for m in self.replies(c)], ["codex", "claude-1", "claude-2"])
 
     def test_skill_goes_to_every_copy_that_has_it(self):
         d = os.path.join(self.folder, ".claude", "skills", "gc-test-multi")
@@ -152,7 +148,6 @@ class SingleAgent(ChatTest):
         self.assertEqual([m["who"] for m in self.replies(c)], ["codex"])
         prompt = self.calls()[0]["argv"][-1]
         self.assertIn("a human user and no other AI agents", prompt)
-        self.assertIsNone(srv.reviewer_of(c, "codex"))
 
 
 class Models(ChatTest):
