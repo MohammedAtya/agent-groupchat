@@ -4,6 +4,7 @@ import re
 import tempfile
 
 from ..skills import HOME, ancestors, scan_skill_dirs
+from . import base
 from .base import TALK_TEXT, Adapter, add_file, error_text, first_line, rel
 
 
@@ -86,13 +87,15 @@ class CodexAdapter(Adapter):
         with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as tf:
             outfile = tf.name
         try:
-            base = [*self.command, "exec", "--skip-git-repo-check", "--json", *conf]
+            start = [*self.command, "exec", "--skip-git-repo-check", "--json", *conf]
+            text = prompt if sid else ctx.system_prompt + "\n\n" + prompt  # (intro: new sessions)
+            stdin = text if len(text) > base.ARGV_LIMIT else None  # "-": read it from stdin
+            arg = "-" if stdin else text
             if sid:
-                cmd = [*base, "-o", outfile, "resume", sid, prompt]
-            else:  # a new session gets the group-chat intro at the top of its first prompt
-                cmd = [*base, "-C", ctx.folder, "-o", outfile,
-                       ctx.system_prompt + "\n\n" + prompt]
-            code, err, why = ctx.stream(cmd, on_event)
+                cmd = [*start, "-o", outfile, "resume", sid, arg]
+            else:
+                cmd = [*start, "-C", ctx.folder, "-o", outfile, arg]
+            code, err, why = ctx.stream(cmd, on_event, stdin=stdin)
             with open(outfile, encoding="utf-8", errors="replace") as f:
                 text = f.read().strip()
         finally:

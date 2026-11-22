@@ -16,8 +16,8 @@ def make_ctx(folder, session=None):
     def preview(text, append=False):
         seen["preview"] = seen["preview"] + text if append else text
 
-    def stream(cmd, on_event):
-        p = subprocess.run(cmd, cwd=folder, capture_output=True, text=True)
+    def stream(cmd, on_event, stdin=None):
+        p = subprocess.run(cmd, cwd=folder, capture_output=True, text=True, input=stdin)
         for line in p.stdout.splitlines():
             try:
                 on_event(json.loads(line))

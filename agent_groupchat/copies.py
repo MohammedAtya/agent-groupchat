@@ -171,20 +171,37 @@ def _tree(root, commit):
 
 
 def unsafe_links(root, commit):
-    """Symlinks in `commit` pointing outside the repo (absolute, or ../ past the top): an agent
-    writing through one in its copy would change the user's real files."""
-    bad = []
+    """Symlinks in `commit` that lead outside the repo, resolving them step by step like the
+    OS would (so chains such as l1 -> sub/l2/.. with sub/l2 -> .. are caught): an agent writing
+    through one in its copy would change the user's real files."""
+    links = {}
     for path, (mode, sha) in _tree(root, commit).items():
-        if mode != "120000":
-            continue
-        target = git_bytes(root, "cat-file", "blob", sha).decode("utf-8", "replace")
-        if os.path.isabs(target) or target.startswith(("/", "\\")) or re.match(r"^[A-Za-z]:", target):
-            bad.append(path)
-            continue
-        joined = os.path.normpath(os.path.join(os.path.dirname(path), target)).replace(os.sep, "/")
-        if joined == ".." or joined.startswith("../"):
-            bad.append(path)
-    return sorted(bad)
+        if mode == "120000":
+            links[path] = git_bytes(root, "cat-file", "blob", sha).decode("utf-8", "replace")
+
+    def escapes(path):
+        todo, done, hops = path.split("/"), [], 0
+        while todo:
+            part = todo.pop(0)
+            if part in ("", "."):
+                continue
+            if part == "..":
+                if not done:
+                    return True  # above the repo's top
+                done.pop()
+                continue
+            here = "/".join(done + [part])
+            if here in links:
+                hops += 1
+                target = links[here]
+                if hops > 40 or os.path.isabs(target) or target.startswith(("/", "\\")) \
+                        or re.match(r"^[A-Za-z]:", target):
+                    return True
+                todo = target.replace("\\", "/").split("/") + todo  # relative to the link's folder
+                continue
+            done.append(part)
+        return False
+    return sorted(p for p in links if escapes(p))
 
 
 def has_submodules(root, commit):
@@ -256,10 +273,14 @@ def conflict_markers(folder, files):
 
 
 def _write(root, path, mode, data):
-    """Write `data` (bytes, already in working-tree form) as `path` with git's file mode."""
+    """Write `data` (bytes, already in working-tree form) as `path` with git's file mode,
+    keeping the existing file's permission bits (a 0600 file stays 0600)."""
     dest = os.path.join(root, *path.split("/"))
     os.makedirs(os.path.dirname(dest), exist_ok=True)
-    if os.path.islink(dest) or (os.path.exists(dest) and mode == "120000"):
+    if os.path.isdir(dest) and not os.path.islink(dest):
+        os.rmdir(dest)  # a folder the copy turned into a file (empty by now; else OSError)
+    old = os.lstat(dest).st_mode if os.path.lexists(dest) and not os.path.islink(dest) else None
+    if os.path.islink(dest) or (os.path.lexists(dest) and mode == "120000"):
         os.remove(dest)
     if mode == "120000":
         try:
@@ -268,11 +289,17 @@ def _write(root, path, mode, data):
         except (OSError, NotImplementedError):
             pass  # (no symlinks, e.g. on Windows without the right): write it as a file
     tmp = dest + ".gc-tmp"
-    with open(tmp, "wb") as f:
-        f.write(data)
-    if mode == "100755" and os.name != "nt":
-        os.chmod(tmp, os.stat(tmp).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-    os.replace(tmp, dest)
+    try:
+        with open(tmp, "wb") as f:
+            f.write(data)
+        if os.name != "nt":
+            perm = stat.S_IMODE(old) if old is not None else stat.S_IMODE(os.stat(tmp).st_mode)
+            ex = stat.S_IXUSR | (stat.S_IXGRP if perm & stat.S_IRGRP else 0) | (stat.S_IXOTH if perm & stat.S_IROTH else 0)
+            os.chmod(tmp, perm | ex if mode == "100755" else perm & ~(stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH))
+        os.replace(tmp, dest)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
 
 
 def _checkout_bytes(root, path, sha):
@@ -335,22 +362,56 @@ def use_copy(root, base, branch, scope="."):
             plan.append((p, (theirs[0], merged)))
     if clash:
         return False, sorted(clash), "clash"
-    for p, entry in plan:
-        if entry is None:
-            dest = os.path.join(root, *p.split("/"))
-            if os.path.lexists(dest):
-                os.remove(dest)
-        else:
-            mode, sha = entry
-            data = git_bytes(root, "cat-file", "blob", sha) if mode == "120000" \
-                else _checkout_bytes(root, p, sha)
-            _write(root, p, mode, data)
+    touched = []
+    try:
+        for p, entry in sorted(plan, key=lambda x: x[1] is not None):  # deletions first
+            touched.append(p)
+            if entry is None:
+                dest = os.path.join(root, *p.split("/"))
+                if os.path.lexists(dest):
+                    os.remove(dest)
+                _prune_empty(root, os.path.dirname(dest))
+            else:
+                mode, sha = entry
+                data = git_bytes(root, "cat-file", "blob", sha) if mode == "120000" \
+                    else _checkout_bytes(root, p, sha)
+                _write(root, p, mode, data)
+    except (OSError, GitError) as e:  # put back what was already changed: all or nothing
+        _rollback(root, touched, t_now)
+        return False, files, f"error: {e}"
     return True, files, ""
+
+
+def _prune_empty(root, folder):
+    """Remove folders left empty by deletions (up to the repo's top)."""
+    root = os.path.realpath(root)
+    while os.path.realpath(folder).startswith(root + os.sep):
+        try:
+            os.rmdir(folder)
+        except OSError:
+            return
+        folder = os.path.dirname(folder)
+
+
+def _rollback(root, paths, tree_now):
+    """Put `paths` back as they were (from the snapshot taken just before)."""
+    for p in reversed(paths):
+        dest = os.path.join(root, *p.split("/"))
+        try:
+            if p in tree_now:
+                mode, sha = tree_now[p]
+                _write(root, p, mode, git_bytes(root, "cat-file", "blob", sha) if mode == "120000"
+                       else _checkout_bytes(root, p, sha))
+            elif os.path.lexists(dest) and not os.path.isdir(dest):
+                os.remove(dest)
+        except (OSError, GitError):
+            pass
 
 
 def merge_copies(root, base, branches, path, branch, scope="."):
     """A new copy at `path` starting at `base` with every branch in `branches` merged in.
-    -> files with conflicts (left with conflict markers for an agent to fix)."""
+    -> files with conflicts (text ones keep conflict markers for an agent to fix; binary and
+    edit-vs-delete ones have none, so unresolved() checks that the fixer changed them)."""
     make_copy(root, base, path, branch, scope)
     conflicts = []
     for b in branches:
@@ -366,6 +427,50 @@ def merge_copies(root, base, branches, path, branch, scope="."):
             git(path, "add", "-A")
             git(path, *IDENT, "commit", "-q", "--no-edit", "--no-verify", "-m", f"merge {b} (with conflicts)")
     return sorted(set(conflicts))
+
+
+def unresolved(path, merged_at, conflicts):
+    """Conflicted files a fixer didn't resolve: conflict markers still in them, or (binary /
+    edit-vs-delete conflicts, which have no markers) not changed at all since the merge."""
+    touched = {p for _, p in name_status(path, merged_at, "HEAD")}
+    left = set(conflict_markers(path, conflicts))
+    for f in conflicts:
+        if f not in touched and (not os.path.exists(os.path.join(path, *f.split("/")))
+                                 or not conflict_markers(path, [f])):
+            left.add(f)
+    return sorted(left)
+
+
+# ---- the copies share the user's stash and branches (git worktrees): protect them
+def refs_state(root):
+    """(stash entries, {branch: sha}) of the user's repo, to restore after an agent's turn."""
+    stash = git(root, "log", "-g", "--format=%H %gs", "refs/stash", check=False).splitlines()
+    branches = {}
+    for line in git(root, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads").splitlines():
+        name, sha = line.rsplit(" ", 1)
+        if not name.startswith("refs/heads/agent/"):
+            branches[name] = sha
+    return stash, branches
+
+
+def restore_refs(root, before):
+    """Put back stash entries and branches that disappeared during an agent's turn. Never
+    undoes anything else (the user may be committing in their own folder meanwhile).
+    -> what was restored."""
+    stash_before, branches_before = before
+    stash_now, branches_now = refs_state(root)
+    fixed = []
+    have = {l.split(" ", 1)[0] for l in stash_now}
+    for line in reversed(stash_before):  # oldest first, so the order stays the same
+        sha, _, msg = line.partition(" ")
+        if sha not in have:
+            git(root, "stash", "store", "-m", msg or "restored by agent-groupchat", sha, check=False)
+            fixed.append(f"stash {msg or sha[:8]}")
+    for name, sha in branches_before.items():
+        if name not in branches_now:
+            git(root, "update-ref", name, sha, check=False)
+            fixed.append(f"branch {name[len('refs/heads/'):]}")
+    return fixed
 
 
 def remove_worktree(root, path):

@@ -19,9 +19,10 @@ class RunContext:
     save_session: Callable[[str], None]          # remember the session id (call as soon as known)
     step: Callable[[str], None]                  # one line of live activity ("✏️ editing x.py")
     preview: Callable[..., None]                 # preview(text, append=False): live reply text
-    stream: Callable[[list, Callable[[dict], None]], tuple]
-    # stream(cmd, on_event) runs cmd in `folder`, calls on_event for every JSON line of its
-    # stdout and returns (exit code, stderr tail, None | "stopped" | "timed out").
+    stream: Callable[..., tuple]
+    # stream(cmd, on_event, stdin=None) runs cmd in `folder`, calls on_event for every JSON line
+    # of its stdout and returns (exit code, stderr tail, None | "stopped" | "timed out").
+    # stdin: text to send on standard input (long prompts, see ARGV_LIMIT).
     # It owns the process, so the user's Stop button and the timeout work for every agent.
     model: Optional[str] = None      # model for this agent, or None for the CLI's default
     sandbox: bool = False            # is the OS command sandbox (bubblewrap) working?
@@ -29,6 +30,9 @@ class RunContext:
 
 
 TALK_TEXT = "TALK ONLY: discuss only; don't open, change or run anything."
+# Prompts longer than this go on standard input instead of the command line: Windows limits a
+# whole command line to 32,767 characters, Linux one argument to 128 KB.
+ARGV_LIMIT = 20_000 if os.name == "nt" else 100_000
 
 
 class Adapter:

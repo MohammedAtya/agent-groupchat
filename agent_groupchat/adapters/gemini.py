@@ -15,6 +15,7 @@ import platform
 import shutil
 import uuid
 
+from . import base
 from .base import Adapter, add_file, first_line, rel
 
 TALK_POLICY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gemini_talk_policy.toml")
@@ -96,6 +97,9 @@ class GeminiAdapter(Adapter):
                *session_flags, *permissions(level)]
         if ctx.model:
             cmd += ["--model", ctx.model]
+        stdin = None
+        if len(text) > base.ARGV_LIMIT:  # too long for the command line: -p is appended to stdin
+            stdin, text = text, " "
         cmd += ["--prompt", text]
         out = {"files": [], "text": "", "result": None, "error": None, "started": False}
 
@@ -121,7 +125,7 @@ class GeminiAdapter(Adapter):
                 if ev.get("status") == "error":
                     out["error"] = (ev.get("error") or {}).get("message") or "Gemini reported an error"
 
-        code, err, why = ctx.stream(cmd, on_event)
+        code, err, why = ctx.stream(cmd, on_event, stdin=stdin)
         stats = (out["result"] or {}).get("stats") or {}
         meta = {"files": out["files"], "cost": None,
                 "tokens": [stats.get("input_tokens", 0), stats.get("output_tokens", 0)]

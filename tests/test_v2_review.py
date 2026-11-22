@@ -46,6 +46,15 @@ class CopySafety(Repo):
         base = cp.snapshot(self.root)
         self.assertEqual(cp.unsafe_links(self.root, base), ["abs-link", "up-link"])
 
+    @unittest.skipUnless(CAN_SYMLINK, "needs symlinks")
+    def test_symlink_chains_are_followed(self):
+        os.makedirs(self.p("sub"))
+        os.symlink("..", self.p("sub", "l2"))             # stays inside on its own
+        os.symlink("sub/l2/..", self.p("l1"))              # but through l2 it leaves the repo
+        os.symlink("sub/l2/app.py", self.p("l3"))          # inside: fine
+        base = cp.snapshot(self.root)
+        self.assertEqual(cp.unsafe_links(self.root, base), ["l1"])
+
     def test_use_is_byte_exact(self):
         base, c = self.race("a")
         path, branch = c["a"]
@@ -356,6 +365,115 @@ class SplitHttpFixes(HttpBase, RaceTest):
             time.sleep(0.05)
         self.assertEqual(len([x for x in self.calls() if "(🧩 Split · Planner" in x["argv"][-1]]), 2)
         self.req("POST", f"/api/chats/{cid}/delete", {})
+
+
+class SecondReview(RaceTest):
+    """The independent second review's findings (N1-N14)."""
+
+    def test_n1_race_and_split_reviews_cant_be_retried_in_the_users_folder(self):
+        self.rules({"if": "(⚡ Race · Reviewer", "exit": 1}, *RACE_RULES)
+        c, r = self.race()
+        idx = next(i for i, m in enumerate(c["messages"]) if (m.get("meta") or {}).get("stage") == "review-race")
+        self.assertIn("part of a Race/Split", srv.retry_block(c, idx))
+
+    def test_n2_use_rolls_back_when_it_cant_finish(self):
+        c, r = self.race()
+        path = r["copies"]["codex"]["path"]
+        os.makedirs(os.path.join(path, "pkg"))
+        write(os.path.join(path, "pkg", "a.py"), "x\n")
+        cp.save_copy(path)
+        os.makedirs(os.path.join(self.folder, "pkg", "a.py"))  # a folder (not empty) where the copy has a file
+        write(os.path.join(self.folder, "pkg", "a.py", "keep.txt"), "user file\n")
+        before = self.read(self.folder, "app.py")
+        code, out = srv.race_action(c, {"action": "use", "copy": "codex"})
+        self.assertEqual(code, 500)
+        self.assertIn("put back", out["error"])
+        self.assertEqual(self.read(self.folder, "app.py"), before)  # nothing half-written
+        self.assertFalse([f for f in os.listdir(self.folder) if f.endswith(".gc-tmp")])
+
+    def test_n3_unchanged_binary_conflict_isnt_resolved(self):
+        self.rules({"style": "claude", "if": "(⚡ Race: you and", "write": {"logo.bin": "\u0000A"}, "reply": "a"},
+                   {"style": "codex", "if": "(⚡ Race: you and", "write": {"logo.bin": "\u0000B"}, "reply": "b"},
+                   {"if": "(⚡ Race · Combine", "reply": "Fixed (no edits)."}, *RACE_RULES)
+        c, r = self.race()
+        srv.race_action(c, {"action": "combine", "copies": ["claude-1", "codex"]})
+        RaceFixes.wait_idle(self, c)
+        res = r["copies"]["_combined"]
+        self.assertEqual(res["status"], "conflicts")
+        self.assertIn("logo.bin", res["warn"])
+
+    def test_n4_n5_unfinished_checks_never_say_ready(self):
+        self.rules({"if": "(🧩 Split · Reviewer", "exit": 1}, *SPLIT_RULES)
+        c = self.chat(agents=SPLIT_TEAM)
+        srv.start_split(c, "build login", OWN)
+        srv.worker(c)
+        self.assertEqual(c["race"]["stage"], "stopped")
+        self.assertIn("not fully checked", c["race"]["copies"]["_combined"]["warn"])
+
+    def test_n7_use_keeps_file_permissions(self):
+        if os.name == "nt":
+            self.skipTest("POSIX permissions")
+        os.chmod(os.path.join(self.folder, "app.py"), 0o600)
+        c, r = self.race()
+        self.assertEqual(srv.race_action(c, {"action": "use", "copy": "codex"})[0], 200)
+        self.assertEqual(os.stat(os.path.join(self.folder, "app.py")).st_mode & 0o777, 0o600)
+
+    def test_n8_stash_and_branches_are_put_back(self):
+        write(os.path.join(self.folder, "app.py"), "wip\n")
+        git(self.folder, "stash", "-q")
+        git(self.folder, "branch", "feature")
+        self.rules({"style": "codex", "if": "(⚡ Race: you and", "write": {"app.py": "codex\n"},
+                    "reply": "done"}, *RACE_RULES)
+        c = self.chat(agents=RACE_TEAM)
+        srv.start_race(c, "build it")
+        r = c["race"]
+        before = cp.refs_state(r["root"])
+        git(self.folder, "stash", "drop", "-q")  # what an agent's `git stash pop` would do
+        git(self.folder, "branch", "-D", "feature")
+        fixed = cp.restore_refs(r["root"], before)
+        self.assertEqual(len(fixed), 2)
+        self.assertIn("stash@{0}", git(self.folder, "stash", "list"))
+        self.assertIn("feature", git(self.folder, "branch", "--list", "feature"))
+        self.assertIn("don't use git stash", srv.intro("codex", c, "/some/copy"))
+
+    def test_n11_restart_clears_running_statuses(self):
+        c = self.chat(agents=RACE_TEAM)
+        srv.start_race(c, "build it")
+        with open(srv.chat_path(c["id"])) as f:
+            saved = json.load(f)
+        saved["messages"][saved["race"]["msg"]]["status"]["codex"] = "running"
+        srv.migrate(saved)
+        self.assertEqual(saved["messages"][saved["race"]["msg"]]["status"]["codex"], "stopped")
+
+    def test_n13_retrying_one_racer_retests_only_its_copy(self):
+        self.rules({"style": "claude", "if": "(⚡ Race: you and", "exit": 1}, *RACE_RULES)
+        c = self.chat(agents=RACE_TEAM)
+        srv.start_race(c, "build it")
+        srv.worker(c)
+        tests_before = len([x for x in self.calls() if "(⚡ Race · Tester" in x["argv"][-1]])
+        idx = next(i for i, m in enumerate(c["messages"]) if m["who"] == "claude-1" and (m.get("meta") or {}).get("copy"))
+        self.rules(*RACE_RULES)
+        srv.worker(c, lambda: srv.retry(c, idx))
+        self.assertEqual(len([x for x in self.calls() if "(⚡ Race · Tester" in x["argv"][-1]]) - tests_before, 1)
+
+
+class LongPrompts(RaceTest):
+    def test_long_prompts_go_on_stdin(self):
+        from agent_groupchat.adapters import base
+        old = base.ARGV_LIMIT
+        base.ARGV_LIMIT = 50
+        try:
+            for who in ("claude", "codex", "gemini"):
+                with self.subTest(who=who):
+                    self.reset_calls()
+                    c = self.chat(agents=[{"adapter": who, "level": "read"}])
+                    self.send(c, "hello " * 20)
+                    call = self.calls()[-1]
+                    self.assertIn("hello hello", call["stdin"] or "")
+                    self.assertNotIn("hello hello", " ".join(call["argv"]))
+                    self.assertTrue(self.replies(c)[0]["text"].startswith("fake"), self.replies(c)[0]["text"])
+        finally:
+            base.ARGV_LIMIT = old
 
 
 class Names(unittest.TestCase):

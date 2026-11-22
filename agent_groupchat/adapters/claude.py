@@ -4,6 +4,7 @@ import os
 import uuid
 
 from ..skills import HOME, ancestors, scan_skill_dirs
+from . import base
 from .base import TALK_TEXT, Adapter, add_file, error_text, first_line, rel
 
 READ_TOOLS = ["Read", "Glob", "Grep", "WebSearch", "WebFetch", "Skill", "TodoWrite"]
@@ -95,7 +96,11 @@ class ClaudeAdapter(Adapter):
         cmd += permissions(level, ctx.sandbox)
         if ctx.model:
             cmd += ["--model", ctx.model]
-        cmd += ["--", prompt]
+        stdin = None
+        if len(prompt) > base.ARGV_LIMIT:  # too long for the command line: `claude -p` reads stdin
+            stdin = prompt
+        else:
+            cmd += ["--", prompt]
         out = {"files": [], "result": None, "started": False}
 
         def on_event(ev):
@@ -123,7 +128,7 @@ class ClaudeAdapter(Adapter):
             elif t == "result":
                 out["result"] = ev
 
-        code, err, why = ctx.stream(cmd, on_event)
+        code, err, why = ctx.stream(cmd, on_event, stdin=stdin)
         if out["started"]:  # the session exists now (even if stopped), so keep resuming it
             ctx.save_session(sid)
         res = out["result"] or {}

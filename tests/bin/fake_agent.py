@@ -27,6 +27,11 @@ if argv == ["--version"]:  # the Test button
     print(f"fake {style} 1.0")
     sys.exit(0)
 prompt = argv[-1] if argv else ""  # (gemini: --prompt is last too)
+stdin_text = None
+if (style == "claude" and argv and argv[-1] != "--" and "--" not in argv) or \
+        (style == "codex" and argv[-1:] == ["-"]) or (style == "gemini" and argv[-1:] == [" "]):
+    stdin_text = sys.stdin.read()  # a long prompt came on standard input
+    prompt = stdin_text + (argv[-1] if style == "gemini" else "")
 if style == "aider":  # the message is in a file
     with open(argv[argv.index("--message-file") + 1], encoding="utf-8") as f:
         prompt = f.read()
@@ -42,7 +47,7 @@ def record(folder, data):
 
 
 if os.environ.get("FAKE_LOG"):
-    record(os.environ["FAKE_LOG"], {"style": style, "argv": argv, "cwd": os.getcwd()})
+    record(os.environ["FAKE_LOG"], {"style": style, "argv": argv, "cwd": os.getcwd(), "stdin": stdin_text})
 
 rule = {}
 for r in json.loads(os.environ.get("FAKE_RULES") or "[]"):

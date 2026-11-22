@@ -775,7 +775,8 @@ function racePanel(c) {  // one card per copy: Use this one / ▸ Diff / combine
     if (raceOpen.has(name)) {
       const d = document.createElement('div'); d.className = 'diff'; d.textContent = 'Loading…'; card.append(d);
       (async () => {
-        const key = `${current}/${r.msg}/${name}`, chatId = current;  // cache per chat and per Race
+        // cache per chat, Race, copy and its latest reply (a Retry or fix round changes the diff)
+        const key = `${current}/${r.msg}/${name}/${cp.msg}/${(cp.diff || []).join(',')}`, chatId = current;
         if (!(key in raceDiffs)) {
           try { const res = await fetch(`/api/chats/${chatId}/race/diff/${encodeURIComponent(name)}`);
                 raceDiffs[key] = res.ok ? await res.text() : '(diff not available)'; }

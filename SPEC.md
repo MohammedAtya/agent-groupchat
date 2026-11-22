@@ -317,6 +317,13 @@ Two ways for agents that can edit to work **at the same time**, each in **its ow
 - Copies you didn't pick stay until your **next Race/Split** in that chat or **🗑 Discard copies**; then the
   worktrees and their branches are deleted. Deleting the chat deletes its copies.
 
+### 14.5b Known limits of the copies
+- Copies are git worktrees, so they **share the user's stash and branches**. Agents in a copy are told
+  not to use `git stash` or touch branches, and after each of their turns the app puts back any stash
+  entry or branch that disappeared (it never undoes anything else).
+- **Submodules aren't copied** (they're empty in the copies); the chat says so when a Race/Split starts.
+- Projects with **symlinks that lead outside them** can't use Race/Split.
+
 ### 14.6 Sessions inside copies
 Claude Code and Gemini CLI keep sessions **per folder**, so an agent's chat session can't simply continue inside a
 copy. A Race/Split turn therefore runs each agent in a **fresh session in its copy** (decided 2026-11-22; works
