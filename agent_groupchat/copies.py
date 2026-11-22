@@ -115,9 +115,10 @@ def save_copy(path, message="agent work"):
     return True
 
 
-def diff(root, base, branch, stat=False):
-    """What `branch` changed since `base` (the copy's diff)."""
-    args = ["diff", "--no-color", "--find-renames"] + (["--stat"] if stat else ["--binary"])
+def diff(root, base, branch, stat=False, binary=True):
+    """What `branch` changed since `base` (the copy's diff). binary=False: for people to read."""
+    args = ["diff", "--no-color", "--find-renames"] + (["--stat"] if stat else
+                                                       ["--binary"] if binary else [])
     return git(root, *args, base, branch)
 
 

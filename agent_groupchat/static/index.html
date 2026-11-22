@@ -38,7 +38,8 @@
            display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
   header h1 { font-size:16px; margin:0; flex:1; min-width:120px; cursor:text;
               white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  header .folder { font-size:12px; color:var(--muted); font-family:ui-monospace, monospace; }
+  header .folder { font-size:12px; color:var(--muted); font-family:ui-monospace, monospace; overflow-wrap:anywhere; }
+  header > div:first-child { min-width:260px; }  /* the buttons wrap below instead of squeezing the title */
   header .agents { font-size:12px; color:var(--muted); }
   header .agents { display:flex; flex-wrap:wrap; gap:4px; margin-top:3px; }
   .chip { font-size:12px; border:1px solid var(--border); border-left:3px solid var(--c, #888); border-radius:8px;
@@ -133,6 +134,26 @@
   form#f button { background:var(--user); color:#fff; border:0; border-radius:10px;
                   padding:0 18px; font-weight:600; cursor:pointer; }
   form#f button#stopBtn { background:var(--bg); color:#c33; border:1px solid #e5a3a0; }
+  form#f button#raceBtn, form#f button#gitInit { background:var(--bg); color:var(--text); border:1px solid var(--border); }
+  form#f button#raceBtn:disabled { opacity:.45; cursor:help; }
+  .note { align-self:center; font-size:12px; color:var(--muted); background:var(--panel); border:1px dashed var(--border);
+          border-radius:10px; padding:4px 12px; max-width:90%; text-align:center; }
+  /* ⚡ Race compare view */
+  .race { align-self:stretch; border:1px solid var(--border); border-radius:12px; background:var(--panel); padding:10px 12px; }
+  .race .rhead { font-weight:600; margin-bottom:8px; }
+  .race .cards { display:grid; grid-template-columns:repeat(auto-fit, minmax(230px, 1fr)); gap:8px; }
+  .race .card { border:1px solid var(--border); border-left:4px solid var(--c, #888); border-radius:10px; padding:8px 10px;
+                font-size:13px; display:flex; flex-direction:column; gap:3px; min-width:0; }
+  .race .card.picked { box-shadow:0 0 0 2px #e3b341 inset; }
+  .race .card.used { box-shadow:0 0 0 2px #1a7f37 inset; }
+  .race .card b { color:var(--c, #888); }
+  .race .card .muted { color:var(--muted); font-size:12px; overflow-wrap:anywhere; }
+  .race .badge2 { font-size:11px; font-weight:600; margin-left:6px; }
+  .race .row2 { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-top:4px; }
+  .race button { font-size:12px; padding:2px 9px; border-radius:7px; border:1px solid var(--border); background:var(--bg); cursor:pointer; }
+  .race button.go { background:var(--user); color:#fff; border-color:var(--user); }
+  .race button:disabled { opacity:.5; cursor:default; }
+  .race .foot { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; align-items:center; font-size:12px; color:var(--muted); }
   form#f button#stopBtn:disabled { opacity:.6; cursor:default; }
   .empty { color:var(--muted); text-align:center; margin-top:18vh; }
   /* slash menu */
@@ -261,6 +282,8 @@
   <form id="f" hidden>
     <textarea id="t" placeholder="Message the group… (@name to ask one agent, / for skills)"></textarea>
     <button type="button" id="stopBtn" hidden title="Stop the running replies (and the rest of this turn)">■ Stop</button>
+    <button type="button" id="gitInit" hidden title="Make this folder a git repo (git init + a first commit; your files don't change). ⚡ Race needs it.">Initialize git here</button>
+    <button type="button" id="raceBtn" title="⚡ Race">⚡ Race</button>
     <button type="submit">Send</button>
   </form>
   </div>
@@ -481,7 +504,14 @@ async function refresh() {
   $('rounds').value = String(c.rounds); $('fixRounds').value = String(c.fix_rounds ?? 1);
   $('fixCtl').hidden = !agentList.some(a => (a.roles || []).includes('lead'));
   $('lockBtn').textContent = c.lock ? '🔒 Locked' : '🔓 Lock'; $('lockBtn').classList.toggle('on', !!c.lock);
+  const rb = $('raceBtn'), canInit = !!(c.git && c.git.can_init);
+  rb.disabled = !!c.race_block;
+  rb.title = c.race_block ? `⚡ Race isn't possible here: ${c.race_block}.` :
+    `⚡ Race: ${listNames(c.racers || [])} each do this message in their own copy of the project, at the same time. ` +
+    'Then the Tester tests each copy, the Reviewer compares them, and you pick one. Costs about one turn per agent.';
+  $('gitInit').hidden = !canInit;
   const sig = c.messages.length + '|' + JSON.stringify(c.sessions) + '|' + JSON.stringify(c.flow) + '|' +
+    JSON.stringify(c.race) + '|' + c.busy + '|' +
     JSON.stringify(c.messages.map(m => [m.status, m.retried]));
   if (sig !== lastSig) {
     lastSig = sig;
@@ -492,7 +522,10 @@ async function refresh() {
       e.textContent = `Say hi to ${listNames(agentList.map(a => a.id))} 👋`; inner.append(e);
     }
     c.messages.forEach((m, idx) => {
-      if (m.hidden || m.who === 'system') return;
+      if (m.hidden) return;
+      if (m.who === 'system') {  // short notes: "You used Codex's copy…"
+        const n = document.createElement('div'); n.className = 'note'; n.textContent = m.text; inner.append(n); return;
+      }
       const meta = m.meta || {}, summary = meta.role === 'summary';
       const failed = m.who !== 'user' && /^\((error|stopped|timed out)/.test(m.text);
       const d = document.createElement('div');
@@ -500,7 +533,7 @@ async function refresh() {
       if (m.who !== 'user') d.style.setProperty('--c', colorOf(m.who));
       const w = document.createElement('div'); w.className = 'who';
       w.textContent = summary ? `📋 Chat summary (by ${names[m.who] || m.who}): fresh sessions continue from here`
-        : (names[m.who] || m.who) + (meta.role ? ' · ' + meta.role : '') + (m.retried ? ' · retried' : '');
+        : (names[m.who] || m.who) + (m.mode === 'race' ? ' · ⚡ Race' : '') + (meta.role ? ' · ' + meta.role : '') + (m.retried ? ' · retried' : '');
       if (meta.verdict) {
         const v = document.createElement('span'); v.className = 'verdict ' + (meta.verdict === 'LGTM' ? 'ok' : 'fix');
         v.textContent = meta.verdict === 'LGTM' ? '✓ LGTM' : '✗ needs fixes'; w.append(v);
@@ -516,6 +549,7 @@ async function refresh() {
       if (openDiffs.has(idx)) showDiff(d, idx);
       inner.append(d);
     });
+    if (c.race) inner.append(racePanel(c));
     const hints = Object.entries(c.resume || {});
     if (hints.length) {
       const r = document.createElement('div'); r.className = 'resume';
@@ -644,6 +678,83 @@ function actions(m, idx, failed) {
     lastSig = ''; refresh(); });
   return x;
 }
+function paintDiff(box, text) {
+  box.textContent = '';
+  for (const line of text.split('\n')) {
+    const sp = document.createElement('span');
+    sp.className = /^(\+\+\+|---)/.test(line) || line.startsWith('@@') ? 'h' : line[0] === '+' ? 'a' : line[0] === '-' ? 'd' : '';
+    sp.textContent = line + '\n'; box.append(sp);
+  }
+}
+let raceOpen = new Set(), raceDiffs = {}, raceSel = new Set();
+const RACE_STAGE = {work: 'the agents are working in their copies…', test: 'the Tester is testing each copy…',
+  review: 'the Reviewer is comparing the copies…', combine: 'combining copies…',
+  done: 'pick the copy you want', stopped: 'stopped (finished copies can still be used)'};
+function racePanel(c) {  // one card per copy: Use this one / ▸ Diff / combine; Discard at the bottom
+  const r = c.race, box = document.createElement('div'); box.className = 'race';
+  const head = document.createElement('div'); head.className = 'rhead';
+  head.textContent = `⚡ Race: ${RACE_STAGE[r.stage] || r.stage}`; box.append(head);
+  const ready = (r.stage === 'done' || r.stage === 'stopped') && !c.busy;
+  const cards = document.createElement('div'); cards.className = 'cards';
+  for (const [name, cp] of Object.entries(r.copies)) {
+    const card = document.createElement('div');
+    card.className = 'card' + (r.pick === name ? ' picked' : '') + (r.used === name ? ' used' : '');
+    card.style.setProperty('--c', colorOf(cp.agent));
+    const t = document.createElement('div'), b = document.createElement('b'); b.textContent = cp.name; t.append(b);
+    const badge = (txt, color) => { const s = document.createElement('span'); s.className = 'badge2'; s.style.color = color; s.textContent = txt; t.append(s); };
+    if (r.pick === name) badge("⭐ Reviewer's pick", '#b7791f');
+    if (r.used === name) badge('✓ used', '#1a7f37');
+    card.append(t);
+    const line = txt => { const d = document.createElement('div'); d.className = 'muted'; d.textContent = txt; card.append(d); };
+    const st = {working: '● working…', done: '✓ finished', empty: '– changed nothing', error: '✗ error', stopped: '■ stopped', 'timed out': '⏱ timed out'};
+    line(st[cp.status] || cp.status);
+    if (cp.files && cp.files.length) line(`✏️ ${cp.files.length} file${cp.files.length > 1 ? 's' : ''}: ${cp.files.join(', ')}` +
+      (cp.diff ? `  (+${cp.diff[0]} −${cp.diff[1]})` : ''));
+    if (cp.tests) line('🧪 ' + cp.tests + (cp.test_warn ? '  ⚠ the Tester changed files (undone)' : ''));
+    const row = document.createElement('div'); row.className = 'row2';
+    const use = document.createElement('button'); use.type = 'button'; use.className = 'go'; use.textContent = 'Use this one';
+    use.title = 'Copy these changes into your project folder (not committed: you review and commit them)';
+    use.disabled = !ready || cp.status !== 'done' || r.used === name;
+    use.onclick = async () => { const res = await api(`/api/chats/${current}/race`, {action: 'use', copy: name});
+      if (res.error) alert(res.error); lastSig = ''; refresh(); };
+    const dbtn = document.createElement('button'); dbtn.type = 'button';
+    dbtn.textContent = raceOpen.has(name) ? '▾ Hide diff' : '▸ Diff'; dbtn.disabled = !(cp.files && cp.files.length);
+    dbtn.onclick = () => { raceOpen.has(name) ? raceOpen.delete(name) : raceOpen.add(name); lastSig = ''; refresh(); };
+    const lab = document.createElement('label'); lab.className = 'muted';
+    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = raceSel.has(name);
+    cb.disabled = !ready || cp.status !== 'done';
+    cb.onchange = () => { cb.checked ? raceSel.add(name) : raceSel.delete(name); comb.disabled = !ready || raceSel.size < 2; };
+    lab.append(cb, ' combine');
+    row.append(use, dbtn, lab); card.append(row);
+    if (raceOpen.has(name)) {
+      const d = document.createElement('div'); d.className = 'diff'; d.textContent = 'Loading…'; card.append(d);
+      (async () => {
+        if (!(name in raceDiffs)) {
+          try { const res = await fetch(`/api/chats/${current}/race/diff/${encodeURIComponent(name)}`);
+                raceDiffs[name] = res.ok ? await res.text() : '(diff not available)'; }
+          catch (e) { d.textContent = '(could not load the diff)'; return; }
+        }
+        paintDiff(d, raceDiffs[name]);
+      })();
+    }
+    cards.append(card);
+  }
+  box.append(cards);
+  const foot = document.createElement('div'); foot.className = 'foot';
+  const comb = document.createElement('button'); comb.type = 'button'; comb.textContent = '⚡ Combine selected';
+  comb.title = 'Merge the ticked copies into a new one; an agent fixes clashes and runs the tests';
+  comb.disabled = !ready || raceSel.size < 2;
+  comb.onclick = async () => { const res = await api(`/api/chats/${current}/race`, {action: 'combine', copies: [...raceSel]});
+    if (res.error) alert(res.error); raceSel = new Set(); lastSig = ''; refresh(); };
+  const disc = document.createElement('button'); disc.type = 'button'; disc.textContent = '🗑 Discard copies';
+  disc.disabled = !ready;
+  disc.onclick = async () => { if (!confirm("Delete the Race's copies? (Changes you already used stay in your folder.)")) return;
+    const res = await api(`/api/chats/${current}/race`, {action: 'discard'}); if (res.error) alert(res.error);
+    raceOpen = new Set(); raceDiffs = {}; lastSig = ''; refresh(); };
+  foot.append(comb, disc, document.createTextNode('Copies stay until the next Race or Discard.'));
+  box.append(foot);
+  return box;
+}
 async function showDiff(d, idx) {
   const box = document.createElement('div'); box.className = 'diff'; box.textContent = 'Loading…'; d.append(box);
   if (!(idx in diffCache)) {
@@ -693,6 +804,20 @@ function showActivity(act) {
   });
 }
 
+$('raceBtn').onclick = async () => {
+  const text = $('t').value.trim();
+  if (!text || !current) { $('t').focus(); return; }
+  const r = await api(`/api/chats/${current}/send`, {text, mode: 'race'});
+  if (r.error) { alert(r.error); return; }
+  $('t').value = ''; updateTo(); raceOpen = new Set(); raceDiffs = {}; raceSel = new Set(); lastSig = '';
+  refresh(); loadList();
+};
+$('gitInit').onclick = async () => {
+  if (!confirm('Make this folder a git repo? (git init + a first commit of the current files. Your files ' +
+               "don't change, and nothing is uploaded anywhere.)")) return;
+  const r = await api(`/api/chats/${current}/git-init`, {});
+  if (r.error) alert(r.error); lastSig = ''; refresh();
+};
 $('stopBtn').onclick = () => {
   if (stopping || !current) return;
   stopping = true; $('stopBtn').disabled = true; $('stopBtn').textContent = 'Stopping…';
