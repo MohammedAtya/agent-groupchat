@@ -28,6 +28,7 @@ class Repo(unittest.TestCase):
         write(os.path.join(self.root, "app.py"), "def greet():\n    return 'hi'\n")
         write(os.path.join(self.root, ".gitignore"), "secret.txt\n")
         git(self.root, "init", "-q")
+        git(self.root, "config", "core.autocrlf", "false")  # the same on every OS (Windows CI has true)
         git(self.root, "add", "-A")
         git(self.root, *IDENT, "commit", "-q", "-m", "start")
 

@@ -24,6 +24,7 @@ import shutil
 import stat
 import subprocess
 import tempfile
+import threading
 
 # Commits the app makes inside copies use this identity (never the user's own config).
 IDENT = ["-c", "user.name=agent-groupchat", "-c", "user.email=agent-groupchat@localhost",
@@ -48,9 +49,20 @@ def clean_env(extra=None):
     return env
 
 
+# The app's own git commands run one at a time: copies of one repo share its lock files
+# (refs, worktree list), and two at once can make one fail (seen on slow CI machines).
+# They're quick; the agents themselves still work in parallel.
+_git_lock = threading.RLock()
+
+
 def run(cwd, *args, env=None, input=None):
     """Run git. Input/output are bytes: in text mode Python turns every \\n written to a pipe
     into \\r\\n on Windows, and decoding would change non-UTF-8 files."""
+    with _git_lock:
+        return _run(cwd, *args, env=env, input=input)
+
+
+def _run(cwd, *args, env=None, input=None):
     return subprocess.run(["git", *SAFE, *args], cwd=cwd, capture_output=True,
                           input=input if isinstance(input, (bytes, type(None))) else input.encode("utf-8"),
                           env=clean_env(env))

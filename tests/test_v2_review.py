@@ -61,6 +61,20 @@ class CopySafety(Repo):
         with open(self.p("crlf.txt"), "rb") as f:
             self.assertEqual(f.read(), b"one\r\ntwo\r\n")
 
+    def test_use_writes_what_a_git_checkout_would(self):
+        git(self.root, "config", "core.autocrlf", "true")  # like git for Windows' default
+        base, c = self.race("a")
+        write(os.path.join(c["a"][0], "lf.txt"), "x\ny\n")
+        cp.save_copy(c["a"][0])
+        self.assertTrue(cp.use_copy(self.root, base, c["a"][1])[0])
+        with open(self.p("lf.txt"), "rb") as f:
+            got = f.read()
+        os.remove(self.p("lf.txt"))
+        git(self.root, "checkout", c["a"][1], "--", "lf.txt")  # what git itself writes
+        git(self.root, "reset", "-q", "lf.txt")
+        with open(self.p("lf.txt"), "rb") as f:
+            self.assertEqual(got, f.read())
+
     def test_existing_crlf_file_edited_in_the_copy(self):
         with open(self.p("win.txt"), "wb") as f:
             f.write(b"a\r\nb\r\n")
