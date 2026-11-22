@@ -30,6 +30,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import __version__
 from . import config as cfg
+from . import copies
 from . import platform_support as plat
 from .platform_support import sandbox_ok
 from .adapters import ADAPTERS, RunContext, load_adapters, parse_apis
@@ -400,6 +401,19 @@ def save_settings(d):
     if sections:
         cfg.update(CONFIG_FILE, **sections)
         load_adapters(CONFIG_FILE, force=True)
+
+
+_git_cache = {}  # folder -> (time, status): the page asks every second
+
+
+def git_status(folder, fresh=False):
+    """Can ⚡ Race / 🧩 Split run in this folder (it must be in a git repo)? Cached 10 s."""
+    hit = _git_cache.get(folder)
+    if not fresh and hit and time.time() - hit[0] < 10:
+        return hit[1]
+    st = copies.status(folder)
+    _git_cache[folder] = (time.time(), st)
+    return st
 
 
 def legacy_files():
@@ -1428,6 +1442,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({**c, "typing": typing.get(c["id"], {}),
                                        "aliases": aliases(c),
                                        "perm": {b: level_info(c, b) for b in agent_ids(c)},
+                                       "git": git_status(c["folder"]),
                                        "colors": {a["id"]: get_adapter(a["adapter"]).color
                                                   for a in c["agents"]},
                                        "resume": {b: adapter_of(c, b).resume_hint(sid)
@@ -1485,7 +1500,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"ok": True, "imported": import_legacy()})
             cfg.update(CONFIG_FILE, legacy_import="dismissed")
             return self.send_json({"ok": True})
-        m = re.fullmatch(r"/api/chats/(\w+)/(send|settings|agents|go|delete|stop|retry|compact)", p)
+        m = re.fullmatch(r"/api/chats/(\w+)/(send|settings|agents|go|delete|stop|retry|compact|git-init)", p)
         c = chats.get(m.group(1)) if m else None
         if not c:
             return self.send_json({"error": "not found"}, 404)
@@ -1513,6 +1528,12 @@ class Handler(BaseHTTPRequestHandler):
                 kick(c, lambda: retry(c, i))
             else:
                 kick(c, lambda: compact(c))
+        elif action == "git-init":  # "Initialize git here" (for ⚡ Race / 🧩 Split)
+            try:
+                copies.init_repo(c["folder"])
+            except (copies.GitError, OSError) as e:
+                return self.send_json({"error": f"Couldn't initialize git: {e}"}, 400)
+            return self.send_json({"ok": True, "git": git_status(c["folder"], fresh=True)})
         elif action == "go":  # the plan is OK: start the work
             if not go_ahead(c):
                 return self.send_json({"error": "Nothing is waiting for your OK."}, 409)

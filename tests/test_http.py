@@ -184,5 +184,22 @@ class Http(HttpBase):
         self.assertNotIn(cid, srv.chats)  # it doesn't come back after a restart
 
 
+    def test_git_status_and_init(self):
+        code, body = self.req("POST", "/api/chats", {"folder": self.folder})
+        cid = json.loads(body)["id"]
+        with open(os.path.join(self.folder, "notes.md"), "w") as f:
+            f.write("hello\n")
+        chat = json.loads(self.req("GET", f"/api/chats/{cid}")[1])
+        self.assertEqual((chat["git"]["ok"], chat["git"]["can_init"]), (False, True))
+        code, body = self.req("POST", f"/api/chats/{cid}/git-init", {})
+        self.assertEqual(code, 200, body)
+        self.assertTrue(json.loads(body)["git"]["ok"])
+        self.assertTrue(json.loads(self.req("GET", f"/api/chats/{cid}")[1])["git"]["ok"])
+        with open(os.path.join(self.folder, "notes.md")) as f:
+            self.assertEqual(f.read(), "hello\n")  # the files didn't change
+        self.assertEqual(self.req("POST", f"/api/chats/{cid}/git-init", {})[0], 400)  # already a repo
+        self.req("POST", f"/api/chats/{cid}/delete", {})
+
+
 if __name__ == "__main__":
     unittest.main()

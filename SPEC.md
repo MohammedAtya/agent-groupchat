@@ -1,4 +1,4 @@
-# agent-groupchat: Spec v1
+# agent-groupchat: Spec
 
 A local web app where **you and any number of AI agents** work together in one group chat, on one project folder.
 Bring whatever AIs you have (Claude Code, Codex, Gemini CLI, Aider, or any OpenAI-compatible chat API), run
@@ -7,7 +7,7 @@ several copies of the same one, and give each a **role** (Planner, Lead, Tester,
 
 It grows out of the existing Claude + Codex group chat in `~/groupchat/`, which keeps working untouched while this is built.
 
-Status: design confirmed on 2026-11-22. M0–M6 built (tests green on Linux, macOS and Windows); M7 (packaging + first public release) in progress.
+Status: v1 (M0–M7) released as **0.1.0** on 2026-11-22 (GitHub + PyPI). **v2 (§14: ⚡ Race and 🧩 Split) designed and confirmed on 2026-11-22; building V1.**
 
 ---
 
@@ -19,9 +19,9 @@ Status: design confirmed on 2026-11-22. M0–M6 built (tests green on Linux, mac
 - Roles and permissions are **really enforced** through each AI's own permission system, not just requested in the prompt.
 - Safe by default: an agent never gets more power than the user can see on its badge.
 
-**Not in v1** (planned for v2)
-- Agents editing in parallel, each in **its own copy of the project** (git worktree per agent, e.g. `agent/codex-1`),
-  followed by a side-by-side compare where you pick or merge. In v1, editing agents take turns.
+**Not in v1**
+- Agents editing in parallel, each in **its own copy of the project**: that's **v2, see §14** (⚡ Race and 🧩 Split).
+  In v1, editing agents take turns.
 - A desktop app or `.exe`.
 
 ---
@@ -173,7 +173,7 @@ Per-chat setting: 0–3 rounds.
 
 ### 6.3 Editing agents take turns
 Agents that can edit run **one at a time** (edit lock). talk/read agents run in parallel.
-(v2: each editing agent works in its own copy of the project instead; see §1.)
+(v2: ⚡ Race and 🧩 Split let editing agents work at the same time, each in its own copy; see §14.)
 
 ### 6.4 Carried over unchanged
 Hand-offs (`@codex …` in a reply), PASS for "nothing to add", Stop, Retry / Reply, live progress, live preview,
@@ -257,3 +257,84 @@ Pushing to GitHub and publishing to PyPI happen **only when the user says so**.
 - The Talk-only lock is off by default for new chats.
 - Custom role names must be unique; built-in role names are reserved.
 - A Tester's "test files" = paths matching `test*`, `*_test.*`, `*.test.*`, `*.spec.*`, or anything under `tests/`, `test/`, `__tests__/` (configurable per role).
+
+---
+
+## 14. v2: ⚡ Race and 🧩 Split (agents working at the same time)
+
+Two ways for agents that can edit to work **at the same time**, each in **its own copy of the project**:
+
+| | ⚡ **Race** (quality) | 🧩 **Split** (speed) |
+|---|---|---|
+| What | every editing agent does **the same task** its own way | the task is divided; each agent does **a different part** |
+| Tokens / time | ~N× tokens, time of one | ~1× tokens, up to N× faster |
+| At the end | Tester + Reviewer compare the copies; **you pick one** (or Combine) | the parts are **merged automatically**, then tested and reviewed |
+
+### 14.1 Triggers
+- Two buttons next to Send: **⚡ Race** and **🧩 Split**. They send *this one message* that way; every other message
+  works as in v1. Each button is greyed out with the reason when it can't run ("needs 2+ agents that can edit",
+  "the folder isn't a git repo").
+- **Who takes part:** every agent whose permission is **Edit** or higher (Leads and Participants that can edit).
+  Read-only agents (Planner, Critic, Reviewer) don't get a copy.
+
+### 14.2 Git and the copies
+- The copies are **git worktrees**, so the project folder must be a git repo. If it isn't, the buttons are greyed
+  out next to an **"Initialize git here"** button (`git init` + a first commit of the current files; the files
+  themselves don't change).
+- Copies live in `~/.agent-groupchat/worktrees/<chat>/<agent>/`, each on its own branch `agent/<chat>/<agent>`.
+  **Your project folder isn't touched** until you choose.
+- Each copy starts from **exactly what's in your folder right now**, uncommitted and new (not ignored) files
+  included: the app makes a snapshot commit with a temporary git index, so your own staging area and files stay
+  untouched.
+
+### 14.3 ⚡ Race
+1. All editing agents get the same message and work **in parallel**, each in its copy. The edit lock doesn't apply
+   between copies (different folders).
+2. **Tester** (if any) **runs the tests in every copy** (it doesn't write tests here) and reports per copy, e.g.
+   "Claude 2: 12/12 pass · Codex: 11/12". A Tester that changes files in a copy gets the usual ⚠.
+3. **Reviewer** (if any) gets **every copy's diff and test results side by side**, says which is best and why.
+4. **Compare view:** one card per copy (agent, diff, test results, stats, the Reviewer's pick marked) with
+   **"Use this one"**, plus **"Combine"**: pick two copies, and an agent (the first Lead, else the first editing agent)
+   merges them in a new copy, fixes the clashes and runs the tests; the result appears as a new card.
+5. **No automatic fix rounds** in a Race (fixing every copy multiplies the cost): pick one, then ask as usual.
+
+### 14.4 🧩 Split
+- Pressing 🧩 Split opens a small panel:
+  - **"Let the Planner split it"** (needs a Planner): the Planner's plan assigns parts to agents
+    ("Part 1: API → Claude 2; Part 2: page → Codex"); you OK it with the ⏸️ pause, or reply to change it.
+  - **"I'll split it myself"**: one text box per editing agent with its part; empty = no part. No Planner and no
+    pause needed: the agents start at once.
+- Parts must be **independent** (buildable at the same time). If the Planner finds the task can't be split that
+  way, it says so and the message runs normally with one Lead. (Ordered parts come later.)
+- When all parts are done, the app **merges them into one combined copy** (git merge). If parts changed the same
+  lines, the Lead fixes the clash in that copy. Then the **Tester and Reviewer check the combined result**, with the
+  chat's normal **fix rounds** (§6.2). Finally you press **"Use this"**.
+
+### 14.5 "Use this one", Combine, cleanup
+- **"Use this one" / "Use this"** copies that copy's changes (relative to its snapshot) into **your folder,
+  uncommitted**: you review and commit them yourself. If your folder changed in the same places meanwhile, the app
+  stops, says which files clash, and offers Combine instead. Nothing is ever overwritten silently.
+- Copies you didn't pick stay until your **next Race/Split** in that chat or **🗑 Discard copies**; then the
+  worktrees and their branches are deleted. Deleting the chat deletes its copies.
+
+### 14.6 Sessions inside copies
+Claude Code and Gemini CLI keep sessions **per folder**, so an agent's chat session can't simply continue inside a
+copy. A Race/Split turn therefore runs each agent in a **fresh session in its copy** (decided 2026-11-22; works
+the same for every AI):
+- If the chat so far is **short** (under ~30,000 characters), the agents get **the chat itself**.
+- If it's **longer**, the chat's first agent writes **one summary** (read-only, like Compact) and **all agents share
+  it**: one extra turn per Race/Split, not one per agent.
+- Each agent's **normal session continues afterwards** and sees everything that happened in the chat (the parts,
+  the reviews, which copy you picked).
+- (Considered and dropped: forking each CLI's real session into the copy. Better memory, but it depends on where
+  each CLI stores its session files, which can change with any update, and it doesn't work for Gemini, Aider or
+  APIs.)
+
+### 14.7 Milestones
+| # | Milestone | Done when |
+|---|---|---|
+| V1 | Copies: git check + "Initialize git here", snapshot (incl. uncommitted), worktrees, diffs, "Use this one", cleanup | tests on throwaway git repos: copies, apply, clash detection, cleanup |
+| V2 | ⚡ Race: button, parallel runs in copies, Tester per copy, Reviewer comparison, compare view, Combine | a Race with fake agents works end to end in the browser |
+| V3 | 🧩 Split: panel (Planner split / own split), parallel parts, auto-merge + conflict fix, checks + fix rounds | a Split with fake agents works end to end, incl. a clash |
+| V4 | README + demo, CI green on 3 OSes, release **0.2.0** | `pipx install agent-groupchat` gets 0.2.0 |
+
