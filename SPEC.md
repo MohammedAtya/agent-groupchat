@@ -7,7 +7,7 @@ several copies of the same one, and give each a **role** (Planner, Lead, Tester,
 
 It grows out of the existing Claude + Codex group chat in `~/groupchat/`, which keeps working untouched while this is built.
 
-Status: **design confirmed by the user on 2026-11-22.** Code starts with milestone M0.
+Status: design confirmed on 2026-11-22. M0–M6 built (tests green on Linux, macOS and Windows); M7 (packaging + first public release) in progress.
 
 ---
 

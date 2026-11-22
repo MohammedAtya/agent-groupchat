@@ -26,3 +26,28 @@ jobs:
       # The tests use fake agent CLIs (tests/bin/fake_agent.py), so no AI is called.
       - name: Run the tests
         run: python -m unittest discover -s tests -t . -v
+
+  package:
+    # "pipx install works on a clean machine": build, install with pipx, start it, check it answers.
+    name: install with pipx · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install with pipx
+        run: |
+          python -m pip install --upgrade pipx
+          python -m pipx install .
+          python -m pipx ensurepath
+      - name: Start it and check it answers
+        shell: bash
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          python tests/smoke_installed.py
