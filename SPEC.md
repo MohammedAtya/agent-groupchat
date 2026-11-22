@@ -7,7 +7,7 @@ several copies of the same one, and give each a **role** (Planner, Lead, Tester,
 
 It grows out of the existing Claude + Codex group chat in `~/groupchat/`, which keeps working untouched while this is built.
 
-Status: v1 (M0–M7) released as **0.1.0** on 2026-11-22 (GitHub + PyPI). **v2 (§14: ⚡ Race and 🧩 Split) designed and confirmed on 2026-11-22; building V1.**
+Status: v1 (M0–M7) released as **0.1.0** on 2026-11-22 (GitHub + PyPI). **v2 (§14: ⚡ Race and 🧩 Split)** built and reviewed (Codex + an independent review, all findings fixed); released as **0.2.0**.
 
 ---
 

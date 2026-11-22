@@ -55,6 +55,14 @@ class CopySafety(Repo):
         base = cp.snapshot(self.root)
         self.assertEqual(cp.unsafe_links(self.root, base), ["l1"])
 
+    def test_same_size_change_in_the_same_second_is_seen(self):
+        base = cp.snapshot(self.root)
+        with open(self.p("app.py")) as f:
+            old = f.read()
+        write(self.p("app.py"), old.replace("hi", "yo"))  # same size, same second
+        now = cp.snapshot(self.root)
+        self.assertIn("app.py", [p for _, p in cp.name_status(self.root, base, now)])
+
     def test_use_is_byte_exact(self):
         base, c = self.race("a")
         path, branch = c["a"]

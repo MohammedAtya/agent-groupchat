@@ -127,21 +127,23 @@ def init_repo(folder):
 
 def snapshot(folder, ref=None):
     """Commit the folder exactly as it is now, without touching the user's index or files:
-    start from a copy of their index (so staged files, even force-added ignored ones, are
+    start from the entries of their index (so staged files, even force-added ignored ones, are
     in), then add every change and new non-ignored file inside the chat's folder. Kept alive
-    under `ref`. -> commit sha."""
+    under `ref`. -> commit sha.
+    The entries are copied WITHOUT their stat data (size, times): with it, a file changed in the
+    same second at the same size looks unchanged to git ("racy git") and would be missed."""
     root = repo_root(folder)
     if not root:
         raise GitError("not a git repo")
     scope = scope_of(root, folder)
-    real_index = os.path.join(root, git(root, "rev-parse", "--git-path", "index").strip())
     tmpdir = tempfile.mkdtemp(prefix="gc-index-")
     index = os.path.join(tmpdir, "index")
     env = {"GIT_INDEX_FILE": index}
     try:
         head = git(root, "rev-parse", "--verify", "-q", "HEAD", check=False).strip()
-        if os.path.exists(real_index):
-            shutil.copyfile(real_index, index)
+        entries = git_bytes(root, "ls-files", "--stage", "-z")  # the user's index: mode, sha, stage, path
+        if entries:
+            git(root, "update-index", "-z", "--index-info", env=env, input=entries)
         elif head:
             git(root, "read-tree", head, env=env)
         git(root, "add", "-A", "--", scope, env=env)

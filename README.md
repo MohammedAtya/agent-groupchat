@@ -15,6 +15,9 @@ enforces**.
   *Codex* reviews, and a local *Llama* via Ollama gives a second opinion.
 - **Roles that act in order**: Planner + Critic → ⏸️ your OK → Lead → Tester → Reviewer, with
   automatic fix rounds when the Tester or Reviewer finds problems.
+- **⚡ Race and 🧩 Split**: several agents work at the same time, each in its own copy of the
+  project. Race: they all do the same task and you pick the best. Split: each builds a different
+  part, and the parts are merged, tested and reviewed. Your folder isn't touched until you choose.
 - **Real permissions, never quietly loosened**: *Talk only*, *Read*, *Edit files*,
   *Edit + run commands* (sandboxed to the project folder) or *Auto*. Each agent's level maps to
   its CLI's own permission flags, and a level an AI can't enforce is greyed out.
@@ -100,6 +103,37 @@ in `~/.agent-groupchat/sessions/`, not in your project.
 - An agent can hold several roles (it gets the highest default); several agents can share a role.
   The same agent can't be Lead *and* Reviewer of its own work (two copies of one AI can).
 - **⚙ Settings → Roles**: copy a built-in role or write your own (name, job, default permission).
+
+## ⚡ Race and 🧩 Split
+
+Two buttons next to Send let agents work **at the same time**, each in **its own copy of the
+project** (a git worktree in `~/.agent-groupchat/worktrees/`). Your project folder isn't touched
+until you press **Use this one**.
+
+| | ⚡ **Race** (quality) | 🧩 **Split** (speed) |
+|---|---|---|
+| What | every agent that can edit does **the same task** its own way | the task is divided; each agent builds **a different part** |
+| Cost / time | about one turn per agent, in the time of one | about one agent's worth, but faster |
+| Then | the Tester runs the tests in every copy, the Reviewer compares them and marks ⭐ its pick | the parts are merged (the Lead fixes clashes), then tested and reviewed, with fix rounds |
+| You | **Use this one**, **Combine** two copies, or **Discard** | **Use** the 🧩 Result |
+
+- **Who takes part:** Leads and agents without a role that can edit files. You need at least 2.
+- **Split** asks the Planner to divide the task (you OK the parts, or reply to change them), or
+  you write each agent's part yourself. If the task can't be split into independent parts, the
+  Lead does it the normal way.
+- **The project must be a git repo.** If it isn't, an **Initialize git here** button does
+  `git init` + a first commit (your files don't change, nothing is uploaded).
+- **Each copy starts from your folder exactly as it is now**, uncommitted and new files included.
+  Every agent works in a fresh session in its copy, given the chat so far (or one shared summary of
+  a long chat).
+- **Use this one** puts the changes into your folder **uncommitted**, byte for byte. If you edited
+  the same lines meanwhile, it refuses and names the files; edits on different lines are merged.
+  It never overwrites a file your git ignores, and if anything fails half-way, your folder is put
+  back as it was.
+- **Limits:** copies share your git **stash and branches** (agents are told not to touch them;
+  stash entries made in a copy are removed, and if one of yours disappears the chat shows how to
+  get it back). **Submodules** aren't copied. Projects with **symlinks that lead outside them**
+  can't use Race or Split.
 
 ## Permissions
 
@@ -187,7 +221,7 @@ teams). Deleting a chat on the page doesn't delete the agents' own sessions.
 ## Development
 
 ```bash
-python3 -m unittest discover -s tests -t .    # ~140 tests, ~10 s, no AI calls
+python3 -m unittest discover -s tests -t .    # ~220 tests, under a minute, no AI calls
 python3 -m agent_groupchat --no-browser       # run from the source folder
 ```
 
@@ -195,8 +229,8 @@ The tests use a fake agent CLI (`tests/bin/fake_agent.py`) that speaks each real
 format, so they cost nothing. GitHub Actions runs them on Linux, macOS and Windows (Python 3.10 and
 3.13) and installs the package with pipx on all three on every push.
 
-Layout: `agent_groupchat/server.py` (chat engine + web server), `roles.py`, `config.py`,
-`platform_support.py`, `adapters/` (one file per AI: `claude.py`, `codex.py`, `gemini.py`,
+Layout: `agent_groupchat/server.py` (chat engine + web server, incl. Race/Split), `copies.py`
+(the git copies), `roles.py`, `config.py`, `platform_support.py`, `adapters/` (one file per AI: `claude.py`, `codex.py`, `gemini.py`,
 `aider.py`, `openai_api.py`), `static/index.html` (the page). Adding an AI means writing one
 adapter (see `adapters/base.py`). The design is in [SPEC.md](https://github.com/MohammedAtya/agent-groupchat/blob/main/SPEC.md).
 
