@@ -19,7 +19,6 @@ import os
 import re
 import secrets
 import shutil
-import signal
 import subprocess
 import sys
 import tempfile
@@ -29,7 +28,10 @@ import difflib
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from . import __version__
 from . import config as cfg
+from . import platform_support as plat
+from .platform_support import sandbox_ok
 from .adapters import ADAPTERS, RunContext, load_adapters, parse_apis
 from .adapters import get as get_adapter
 from .adapters.base import rel
@@ -73,24 +75,6 @@ typing = {}     # id -> {bot: bool}
 workers = {}    # id -> running worker thread
 edit_locks = {}  # id -> Lock: agents that may edit take turns (one at a time per chat)
 
-_sandbox = {"ok": None, "checked": 0}
-
-
-def sandbox_ok():
-    """Both CLIs sandbox commands with bubblewrap. If it can't run (e.g. Ubuntu's
-    AppArmor user-namespace restriction), commands would run UNconfined, so work
-    mode falls back to: Claude edits files only (no shell), Codex read-only."""
-    if time.time() - _sandbox["checked"] > 60:
-        try:
-            r = subprocess.run(["bwrap", "--ro-bind", "/", "/", "true"],
-                               capture_output=True, timeout=10)
-            _sandbox["ok"] = r.returncode == 0
-        except Exception:
-            _sandbox["ok"] = False
-        _sandbox["checked"] = time.time()
-    return _sandbox["ok"]
-
-
 # ---------------------------------------------------------------- storage
 def chat_path(cid):
     return os.path.join(CHATS_DIR, f"{cid}.json")
@@ -99,7 +83,7 @@ def chat_path(cid):
 def save(chat):
     chat["updated"] = time.time()
     tmp = chat_path(chat["id"]) + ".tmp"
-    with open(tmp, "w") as f:
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(chat, f, indent=1)
     os.replace(tmp, chat_path(chat["id"]))
 
@@ -108,7 +92,7 @@ def load_all():
     for name in os.listdir(CHATS_DIR):
         if name.endswith(".json"):
             try:
-                with open(os.path.join(CHATS_DIR, name)) as f:
+                with open(os.path.join(CHATS_DIR, name), encoding="utf-8") as f:
                     c = json.load(f)
                 migrate(c)
                 chats[c["id"]] = c
@@ -328,13 +312,25 @@ def level_info(chat, aid):
     if chat.get("lock"):
         requested = "talk"
     level = requested
-    while rank(level) > 0 and not ad.available(level, sb):
+    while rank(level) > 0 and not can_use(ad, level, sb):
         level = LEVELS[rank(level) - 1]
     return {"level": level, "requested": requested, "default": default,
             "override": a.get("level"), "locked": bool(chat.get("lock")),
             "raised": bool(a.get("level")) and rank(a["level"]) > rank(default),
-            "limited": ad.why_not(requested, sb) if level != requested else "",
+            "limited": why_not(ad, requested, sb) if level != requested else "",
             "choices": {lv: ("" if lv in ad.levels else ad.why_not(lv, True)) for lv in LEVELS}}
+
+
+def can_use(ad, level, sandbox):
+    if plat.IS_WINDOWS and level in ("work", "auto"):
+        return False
+    return ad.available(level, sandbox)
+
+
+def why_not(ad, level, sandbox):
+    if plat.IS_WINDOWS and level in ("work", "auto") and level in ad.levels:
+        return plat.WINDOWS_LIMIT
+    return ad.why_not(level, sandbox)
 
 
 def level_of(chat, aid):
@@ -419,7 +415,7 @@ def import_legacy():
     for name in legacy_files():
         cid = name[:-5]
         try:
-            with open(os.path.join(LEGACY_CHATS_DIR, name)) as f:
+            with open(os.path.join(LEGACY_CHATS_DIR, name), encoding="utf-8") as f:
                 c = json.load(f)
             if c.get("id") != cid:
                 continue
@@ -624,32 +620,29 @@ halted = set()  # chat ids where the user pressed Stop; cleared by their next me
 
 
 def kill(p, reason):
-    """Stop an agent run: SIGTERM its whole process group, SIGKILL if it lingers."""
+    """Stop an agent run and everything it started (see platform_support.kill_tree)."""
     if p.poll() is not None:
         return
     p.gc_reason = reason
-    try:
-        os.killpg(p.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        return
-
-    def hard():
-        if p.poll() is None:
-            try:
-                os.killpg(p.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-    threading.Timer(5, hard).start()
+    plat.kill_tree(p)
 
 
 def stream(chat, bot, cmd, on_event):
     """Run an agent CLI, passing each JSON line of its stdout to on_event.
     Returns (exit code, stderr tail, None | "stopped" | "timed out")."""
     key = (chat["id"], bot)
-    with tempfile.TemporaryFile(mode="w+") as err:
-        p = subprocess.Popen(cmd, cwd=chat["folder"], stdin=subprocess.DEVNULL,
-                             stdout=subprocess.PIPE, stderr=err, text=True,
-                             start_new_session=True)  # own process group, for Stop
+    try:
+        cmd = plat.resolve_command(cmd)
+    except plat.UnsafeCommand as e:
+        return 1, str(e), None
+    with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as err:
+        try:
+            p = subprocess.Popen(cmd, cwd=chat["folder"], stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.PIPE, stderr=err, text=True,
+                                 encoding="utf-8", errors="replace",
+                                 **plat.popen_kwargs())  # own process group, for Stop
+        except OSError as e:  # e.g. the CLI isn't installed
+            return 1, f"couldn't start {cmd[0]}: {e}", None
         p.gc_reason = None
         procs[key] = p
         if chat["id"] in halted:  # Stop was pressed while this was starting
@@ -927,7 +920,7 @@ def ask(chat, bot, extra="", cap=None, role=None, stage="", force=False):
     idx = add_msg(chat, bot, reply, meta=meta)
     if diff:
         os.makedirs(os.path.dirname(diff_path(chat["id"], idx)), exist_ok=True)
-        with open(diff_path(chat["id"], idx), "w") as f:
+        with open(diff_path(chat["id"], idx), "w", encoding="utf-8") as f:
             f.write(diff)
     return reply
 
@@ -1372,6 +1365,9 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"chats": lst, "home": os.path.expanduser("~"),
                                    "sandbox": sandbox_ok(),
                                    "config_error": config_error,
+                                   "platform": {"os": plat.SYSTEM, "wsl": plat.IS_WSL,
+                                                "native_windows": plat.IS_WINDOWS,
+                                                "sandbox_help": "" if sandbox_ok() else plat.sandbox_help()},
                                    "legacy": {"count": len(legacy_files()), "dir": LEGACY_CHATS_DIR},
                                    "adapters": [{"id": a.id, "name": a.name, "color": a.color,
                                                  "installed": a.installed(),
@@ -1403,7 +1399,7 @@ class Handler(BaseHTTPRequestHandler):
         m = re.fullmatch(r"/api/chats/(\w+)/diff/(\d+)", p)
         if m:
             try:
-                with open(diff_path(m.group(1), int(m.group(2)))) as f:
+                with open(diff_path(m.group(1), int(m.group(2))), encoding="utf-8") as f:
                     body = f.read().encode()
             except OSError:
                 return self.send_json({"error": "no diff"}, 404)
@@ -1442,6 +1438,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Cache-Control", "no-store")  # the token changes every launch
+        self.send_header("X-Agent-Groupchat", __version__)  # lets a second launch find this one
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -1546,13 +1543,49 @@ class Handler(BaseHTTPRequestHandler):
         return self.send_json({"ok": True})
 
 
-def main():
+def set_port(port):
+    global PORT, ALLOWED_HOSTS, ALLOWED_ORIGINS
+    PORT = port
+    ALLOWED_HOSTS = {f"127.0.0.1:{PORT}", f"localhost:{PORT}"}
+    ALLOWED_ORIGINS = {"http://" + h for h in ALLOWED_HOSTS}
+
+
+def main(argv=None):
+    import argparse
+    ap = argparse.ArgumentParser(prog="agent-groupchat",
+                                 description="A local group chat between you and your AI agents.")
+    ap.add_argument("--port", type=int, default=PORT,
+                    help=f"port to use (default {PORT}, or the next free one)")
+    ap.add_argument("--no-browser", action="store_true", help="don't open the browser")
+    ap.add_argument("--version", action="version", version=f"agent-groupchat {__version__}")
+    args = ap.parse_args(argv)
+    for port in range(args.port, args.port + 10):  # skip ports other programs use
+        state = plat.probe(port)
+        if state != "busy":
+            break
+    else:
+        sys.exit(f"Ports {args.port}-{args.port + 9} are all in use. Try --port.")
+    url = f"http://127.0.0.1:{port}"
+    if state == "ours":  # already running: just open it
+        print(f"agent-groupchat is already running: {url}")
+        if not args.no_browser:
+            plat.open_browser(url, delay=0)
+        return
+    set_port(port)
     refresh_adapters()
-    print(f"Group chat on http://127.0.0.1:{PORT}  (data: {DATA_DIR})", flush=True)
-    if not sys.stdout.isatty():  # started in the background: keep a log file instead
-        sys.stdout = sys.stderr = open(LOG_FILE, "a", buffering=1)
     load_all()
-    ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
+    server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+    print(f"agent-groupchat {__version__} on {url}  (your data: {DATA_DIR})", flush=True)
+    if not sandbox_ok():
+        print("Note: " + plat.sandbox_help(), flush=True)
+    if not args.no_browser:
+        plat.open_browser(url)
+    if not sys.stdout.isatty():  # started in the background: keep a log file instead
+        sys.stdout = sys.stderr = open(LOG_FILE, "a", buffering=1, encoding="utf-8")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nStopped.")
 
 
 if __name__ == "__main__":

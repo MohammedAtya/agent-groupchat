@@ -9,7 +9,8 @@ import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-DATA = tempfile.mkdtemp(prefix="gc-test-data-")
+DATA = os.path.realpath(tempfile.mkdtemp(prefix="gc-test-data-"))  # (macOS: /var -> /private/var)
+FAKE = os.path.join(HERE, "bin", "fake_agent.py")
 
 
 def _free_port():
@@ -20,20 +21,25 @@ def _free_port():
 
 # Must be set before the server module is imported (it reads them at import time).
 os.environ["AGENT_GROUPCHAT_HOME"] = DATA
-LEGACY = tempfile.mkdtemp(prefix="gc-test-legacy-")  # never the real ~/groupchat/chats
+LEGACY = os.path.realpath(tempfile.mkdtemp(prefix="gc-test-legacy-"))  # never the real ~/groupchat
 os.environ["AGENT_GROUPCHAT_LEGACY"] = LEGACY
 os.environ["GROUPCHAT_PORT"] = str(_free_port())
-os.environ["PATH"] = os.path.join(HERE, "bin") + os.pathsep + os.environ["PATH"]
 sys.path.insert(0, ROOT)
 
 from agent_groupchat import server as srv  # noqa: E402
+from agent_groupchat.adapters import BUILTIN  # noqa: E402
+
+# Every built-in CLI is replaced by the fake: `python fake_agent.py claude ...` works on every OS
+# (tests/bin/claude etc. are the same as shell scripts, for trying the page by hand).
+for _a in BUILTIN:
+    _a.command = [sys.executable, FAKE, _a.id]
 
 
 class ChatTest(unittest.TestCase):
     sandbox = True
 
     def setUp(self):
-        self.folder = tempfile.mkdtemp(prefix="gc-test-project-")
+        self.folder = os.path.realpath(tempfile.mkdtemp(prefix="gc-test-project-"))
         self.log = os.path.join(self.folder, "..", os.path.basename(self.folder) + ".log")
         os.environ["FAKE_LOG"] = self.log
         os.environ["FAKE_RULES"] = "[]"

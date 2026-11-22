@@ -98,7 +98,7 @@ class AiderAdapter(Adapter):
 
         fd, msg = tempfile.mkstemp(suffix=".txt", prefix="gc-aider-")
         try:
-            with os.fdopen(fd, "w") as f:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(text)
             ctx.step("💭 thinking")
             code, err, why = ctx.stream([*cmd, "--message-file", msg], on_event)

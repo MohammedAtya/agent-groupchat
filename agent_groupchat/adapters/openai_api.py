@@ -45,7 +45,7 @@ class OpenAIChatAdapter(Adapter):
         os.makedirs(ctx.state_dir, exist_ok=True)
         path = os.path.join(ctx.state_dir, f"api-{sid}.json")
         try:
-            with open(path) as f:
+            with open(path, encoding="utf-8") as f:
                 history = json.load(f)
         except (OSError, ValueError):
             history = []
@@ -70,7 +70,7 @@ class OpenAIChatAdapter(Adapter):
 
         fd, req = tempfile.mkstemp(suffix=".json", prefix="gc-api-")
         try:
-            with os.fdopen(fd, "w") as f:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump({"base_url": self.base_url, "model": ctx.model or self.model,
                            "key_env": self.key_env, "messages": messages}, f)
             ctx.step(f"🌐 asking {ctx.model or self.model}")
@@ -87,7 +87,7 @@ class OpenAIChatAdapter(Adapter):
             return "(error) " + (out["error"] or err or (f"exit code {code}" if code else
                                                          "the API sent an empty reply"))[-800:], meta
         history += [{"role": "user", "content": prompt}, {"role": "assistant", "content": text}]
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             json.dump(history, f)
         ctx.save_session(sid)
         return text, meta

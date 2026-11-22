@@ -4,7 +4,16 @@
 > with real permissions. See [SPEC.md](SPEC.md). Agents can be Claude Code, Codex, Gemini CLI, Aider,
 > or any OpenAI-compatible chat API (OpenAI, Ollama, OpenRouter, Groq, LM Studio…).
 
-Start it with:  `python3 -m agent_groupchat`  (from this folder)  →  http://127.0.0.1:8765  (change the port with `GROUPCHAT_PORT`)
+Start it with `python3 -m agent_groupchat` (from this folder; `python` on Windows). It opens
+http://127.0.0.1:8765 in your browser; if that port is taken it uses the next free one, and if it's
+already running it just opens it. Options: `--port 9000`, `--no-browser`, `--version`.
+
+| OS | What works |
+|---|---|
+| Linux | Everything. Commands run in a bubblewrap sandbox (see [Enable the sandbox](#enable-the-sandbox-linux)). |
+| macOS | Everything. Claude Code and Codex use the built-in macOS sandbox. |
+| Windows, in WSL | Everything (it's Linux). |
+| Windows, native | Talk, Read and Edit. Running commands and Auto need a sandbox the agents don't have on native Windows, so they're greyed out and the page suggests WSL. |
 
 - **Sidebar**: all your chats. Click one to reopen it; it reopens the last chat automatically.
 - **New chat**: pick a project folder and the **agents** (AI, name, model, roles, permission), or start
@@ -87,7 +96,10 @@ Defaults: Planner, Critic, Reviewer → Read; Lead, Tester, Participant → Edit
 A permission an AI can't enforce is greyed out. Without a working sandbox, "Edit + run commands"
 drops to "Edit files" (Claude) or "Read" (Codex), and the agent's chip says *(limited)*.
 
-## One-time fix: enable the sandbox (Ubuntu 23.10+ / 24.04)
+## Enable the sandbox (Linux)
+Claude Code and Codex confine commands with `bubblewrap`. Install it if it's missing
+(`sudo apt install bubblewrap`, `sudo dnf install bubblewrap`, …). On **Ubuntu 23.10+ / 24.04**
+AppArmor also blocks it (`bwrap: setting up uid map: Permission denied`); the one-time fix:
 Both CLIs confine commands with `bubblewrap`, but Ubuntu's AppArmor blocks it
 (`bwrap: setting up uid map: Permission denied`). Allow it with:
 
@@ -117,4 +129,5 @@ documents for sandboxing tools. The page notices within about a minute.
 ```
 python3 -m unittest discover -s tests -t .
 ```
-They use fake `claude` / `codex` programs (`tests/bin/`), so they run in seconds and cost nothing.
+They use fake agent CLIs (`tests/bin/fake_agent.py`), so they run in seconds and cost nothing.
+GitHub Actions runs them on Linux, macOS and Windows (Python 3.10 and 3.13) on every push.

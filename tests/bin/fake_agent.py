@@ -18,6 +18,7 @@ import time
 import uuid
 
 started = time.time()
+sys.stdout.reconfigure(encoding="utf-8")  # like the real CLIs (Windows defaults to cp1252)
 
 style, argv = sys.argv[1], sys.argv[2:]
 if argv == ["--version"]:  # the Test button
@@ -25,10 +26,10 @@ if argv == ["--version"]:  # the Test button
     sys.exit(0)
 prompt = argv[-1] if argv else ""  # (gemini: --prompt is last too)
 if style == "aider":  # the message is in a file
-    with open(argv[argv.index("--message-file") + 1]) as f:
+    with open(argv[argv.index("--message-file") + 1], encoding="utf-8") as f:
         prompt = f.read()
 if os.environ.get("FAKE_LOG"):
-    with open(os.environ["FAKE_LOG"], "a") as f:
+    with open(os.environ["FAKE_LOG"], "a", encoding="utf-8") as f:
         f.write(json.dumps({"style": style, "argv": argv, "cwd": os.getcwd()}) + "\n")
 
 rule = {}
@@ -39,12 +40,12 @@ for r in json.loads(os.environ.get("FAKE_RULES") or "[]"):
 if rule.get("sleep"):
     time.sleep(rule["sleep"])
 if os.environ.get("FAKE_TIMES"):
-    with open(os.environ["FAKE_TIMES"], "a") as f:
+    with open(os.environ["FAKE_TIMES"], "a", encoding="utf-8") as f:
         f.write(json.dumps({"argv": argv, "start": started, "end": time.time()}) + "\n")
 reply = rule.get("reply", f"fake {style} reply")
 writes = rule.get("write") or {}
 for path, text in writes.items():
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.write(text)
 
 
@@ -74,13 +75,13 @@ if style == "gemini":
 
 if style == "aider":  # plain-text output; the reply goes to its chat-history file
     hist = argv[argv.index("--chat-history-file") + 1]
-    with open(argv[argv.index("--message-file") + 1]) as f:
+    with open(argv[argv.index("--message-file") + 1], encoding="utf-8") as f:
         message = f.read()
     print("Aider v0.86.2\nModel: fake with whole edit format")
     if rule.get("exit"):  # like the real Aider: the model call failed, exit code may be 0
         print("litellm.APIError: fake failure")
         sys.exit(0 if rule["exit"] == "zero" else rule["exit"])
-    with open(hist, "a") as f:
+    with open(hist, "a", encoding="utf-8") as f:
         f.write("\n# aider chat started at 2026-11-22 10:00:00\n\n")
         f.write("".join(f"#### {l}\n" for l in message.splitlines()) + "\n")
         f.write(reply + "\n\n")
@@ -118,5 +119,5 @@ else:  # codex
     emit({"type": "item.completed", "item": {"type": "agent_message", "text": reply}})
     emit({"type": "turn.completed", "usage": {"input_tokens": 20, "output_tokens": 3}})
     out = argv[argv.index("-o") + 1]
-    with open(out, "w") as f:
+    with open(out, "w", encoding="utf-8") as f:
         f.write(reply)

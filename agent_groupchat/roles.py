@@ -88,7 +88,7 @@ def load_custom_roles(config_file):
     """Custom roles from config.json: {"roles": [{"id", "name", "job", "level"}]}.
     Bad entries are skipped; built-in ids are reserved."""
     try:
-        with open(config_file) as f:
+        with open(config_file, encoding="utf-8") as f:
             items = json.load(f).get("roles") or []
     except (OSError, ValueError, AttributeError):
         return []

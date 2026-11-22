@@ -93,7 +93,7 @@ class CodexAdapter(Adapter):
                 cmd = [*base, "-C", ctx.folder, "-o", outfile,
                        ctx.system_prompt + "\n\n" + prompt]
             code, err, why = ctx.stream(cmd, on_event)
-            with open(outfile) as f:
+            with open(outfile, encoding="utf-8", errors="replace") as f:
                 text = f.read().strip()
         finally:
             os.unlink(outfile)

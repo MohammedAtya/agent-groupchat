@@ -147,7 +147,8 @@ class ClaudeAdapter(Adapter):
         roots += [os.path.join(d, ".claude", "skills") for d in ancestors(folder) if d != HOME]
         files = scan_skill_dirs(roots)
         try:
-            with open(os.path.join(HOME, ".claude", "plugins", "installed_plugins.json")) as f:
+            with open(os.path.join(HOME, ".claude", "plugins", "installed_plugins.json"),
+                      encoding="utf-8") as f:
                 plugins = json.load(f).get("plugins", {})
             for entries in plugins.values():
                 for e in entries:

@@ -231,10 +231,7 @@
   <div id="down" hidden style="background:#fde2e1;color:#8a1c17;padding:8px 16px;font-size:13px;border-bottom:1px solid #f3b8b5">
     ⚠ The chat server isn't running. Start it with <code>python3 -m agent_groupchat</code> in the project folder, and this page reconnects by itself.
   </div>
-  <div id="warn" hidden style="background:#fdf3e1;color:#7a4b00;padding:8px 16px;font-size:13px;border-bottom:1px solid #f0d9a8">
-    ⚠ Sandbox unavailable: agents that need it are limited (Codex stays read-only; in "Can work" Claude can edit files but can't run commands, while Auto still lets Claude do everything).
-    To fix it, run the one-time sandbox setup from the README.
-  </div>
+  <div id="warn" hidden style="background:#fdf3e1;color:#7a4b00;padding:8px 16px;font-size:13px;border-bottom:1px solid #f0d9a8"></div>
   <div id="legacy" hidden><span id="legacyText"></span>
     <button type="button" id="legacyImport">Import copies</button><button type="button" id="legacyNo">Not now</button></div>
   <div id="log"><div class="inner" id="inner"><div class="empty">Pick a chat on the left, or start a new one.</div></div></div>
@@ -421,7 +418,11 @@ async function loadList() {
   if (lg.count) $('legacyText').textContent =
     `Found ${lg.count} chat${lg.count > 1 ? 's' : ''} from the old group chat (${lg.dir.replace(home, '~')}). ` +
     'Import copies? The originals stay where they are.';
-  $('warn').hidden = d.sandbox || !current || !Object.values(perm).some(p => p.limited && !p.locked);
+  const pf = d.platform || {}, help = pf.sandbox_help || '';
+  $('warn').textContent = help ? '⚠ ' + help : '';
+  // native Windows: always say it; elsewhere only when an agent of the open chat is limited by it
+  $('warn').hidden = !help || (!pf.native_windows &&
+    (!current || !Object.values(perm).some(p => p.limited && !p.locked)));
   const list = $('list'); list.innerHTML = '';
   for (const c of d.chats) {
     const el = document.createElement('div');

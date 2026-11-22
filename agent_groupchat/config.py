@@ -22,7 +22,7 @@ KEY_LIKE_RE = re.compile(r"^(sk|pk|rk|key|AIza|gsk|xai)[-_]|^[A-Za-z0-9_]{60,}$"
 
 def load(path):
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
         return data if isinstance(data, dict) else {}
     except (OSError, ValueError):
@@ -35,7 +35,7 @@ def update(path, **sections):
         data = load(path)
         data.update(sections)
         tmp = path + ".tmp"
-        with open(tmp, "w") as f:
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
         os.replace(tmp, path)
         return data

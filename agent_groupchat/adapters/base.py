@@ -86,9 +86,11 @@ class Adapter:
         """(ok, message) for the Test button. Default: the CLI runs `--version`. No tokens spent."""
         if not self.installed():
             return False, f"`{self.command[0] if self.command else self.id}` isn't installed (not on PATH)."
+        from ..platform_support import resolve_command  # (Windows: no .cmd via cmd.exe)
         try:
-            r = subprocess.run([*self.command, "--version"], capture_output=True, text=True,
-                               timeout=20, stdin=subprocess.DEVNULL)
+            r = subprocess.run(resolve_command([*self.command, "--version"]), capture_output=True,
+                               text=True, encoding="utf-8", errors="replace", timeout=20,
+                               stdin=subprocess.DEVNULL)
         except Exception as e:
             return False, f"`{self.command[0]} --version` failed: {e}"
         out = (r.stdout or r.stderr).strip().splitlines()

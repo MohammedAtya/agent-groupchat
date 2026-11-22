@@ -25,7 +25,7 @@ def post(url, body, headers):
 
 
 def main():
-    with open(sys.argv[1]) as f:
+    with open(sys.argv[1], encoding="utf-8") as f:
         req = json.load(f)
     key = os.environ.get(req["key_env"], "") if req.get("key_env") else ""
     if req.get("key_env") and not key:

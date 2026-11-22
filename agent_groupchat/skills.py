@@ -28,13 +28,14 @@ def frontmatter(path):
 
 
 def ancestors(folder):
-    """folder and its parents, stopping at $HOME (inclusive) or /."""
+    """folder and its parents, stopping at $HOME (inclusive) or the root (/ or C:\\)."""
     out, cur = [], os.path.abspath(folder)
     while True:
         out.append(cur)
-        if cur in (HOME, "/"):
+        parent = os.path.dirname(cur)
+        if cur == HOME or parent == cur:
             break
-        cur = os.path.dirname(cur)
+        cur = parent
     return out
 
 

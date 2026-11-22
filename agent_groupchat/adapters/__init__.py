@@ -61,7 +61,7 @@ def load_adapters(config_file=None, force=False):
     error, apis = "", []
     if mtime is not None:
         try:
-            with open(config_file) as f:
+            with open(config_file, encoding="utf-8") as f:
                 apis = parse_apis(json.load(f).get("apis"))
         except (OSError, ValueError, AttributeError) as e:
             error = f"config.json: {e}"
