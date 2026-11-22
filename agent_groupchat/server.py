@@ -81,6 +81,8 @@ def chat_path(cid):
 
 
 def save(chat):
+    if chat.get("deleted"):  # deleted while an agent was still replying: don't bring it back
+        return
     chat["updated"] = time.time()
     tmp = chat_path(chat["id"]) + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -895,7 +897,7 @@ def ask(chat, bot, extra="", cap=None, role=None, stage="", force=False):
         if got:
             elock.release()
         with lock:
-            typing[chat["id"]][bot] = False
+            typing.get(chat["id"], {})[bot] = False
             activity.get(chat["id"], {}).pop(bot, None)
     set_status(chat, users, bot, outcome(reply))
     if outcome(reply) == "passed":
@@ -918,7 +920,7 @@ def ask(chat, bot, extra="", cap=None, role=None, stage="", force=False):
         meta["diff"] = [diff.count("\n+") - diff.count("\n+++"),
                         diff.count("\n-") - diff.count("\n---")]
     idx = add_msg(chat, bot, reply, meta=meta)
-    if diff:
+    if diff and not chat.get("deleted"):
         os.makedirs(os.path.dirname(diff_path(chat["id"], idx)), exist_ok=True)
         with open(diff_path(chat["id"], idx), "w", encoding="utf-8") as f:
             f.write(diff)
@@ -1446,11 +1448,20 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if not self.trusted(post=True):
             return self.send_json({"error": "forbidden"}, 403)
-        p = self.path
         try:
             d = self.body()
         except ValueError:
             return self.send_json({"error": "bad json"}, 400)
+        if not isinstance(d, dict):
+            return self.send_json({"error": "the request body must be a JSON object"}, 400)
+        try:
+            return self.post(d)
+        except (ValueError, TypeError, KeyError, AttributeError) as e:  # wrong types in the body
+            print("bad request", self.path, repr(e), flush=True)
+            return self.send_json({"error": f"bad request: {e}"}, 400)
+
+    def post(self, d):
+        p = self.path
         if p == "/api/chats":
             folder = os.path.abspath(os.path.expanduser(d.get("folder") or "~"))
             if not os.path.isdir(folder):
@@ -1480,7 +1491,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"error": "not found"}, 404)
         action = m.group(2)
         if action == "send":
-            text = (d.get("text") or "").strip()
+            text = str(d.get("text") or "").strip() if isinstance(d.get("text"), str) else ""
             if not text:
                 return self.send_json({"error": "empty"}, 400)
             sk = parse_skill(text, c["folder"])
@@ -1532,6 +1543,15 @@ class Handler(BaseHTTPRequestHandler):
                     c["title"] = d["title"].strip()[:80]
                 save(c)
         elif action == "delete":
+            with lock:  # stop its agents; a reply still running must not save it again
+                c["deleted"] = True
+                c["flow"] = None
+                if c["id"] in workers:
+                    halted.add(c["id"])
+                running = [procs.get((c["id"], b)) for b in agent_ids(c)]
+            for pr in running:
+                if pr:
+                    kill(pr, "stopped")
             with lock:
                 chats.pop(c["id"], None)
                 typing.pop(c["id"], None)

@@ -1,6 +1,7 @@
 """The HTTP layer: only the page itself (right Host, Origin and launch token) can drive it."""
 import http.client
 import json
+import os
 import re
 import threading
 import time
@@ -142,6 +143,45 @@ class Http(HttpBase):
         aider = next(a for a in listing["adapters"] if a["id"] == "aider")
         self.assertTrue(aider["needs_model"])
         self.assertEqual(aider["levels"], ["talk", "read", "edit"])
+
+
+    def test_bad_input_gets_a_400_not_a_dropped_connection(self):
+        code, body = self.req("POST", "/api/chats", {"folder": self.folder})
+        cid = json.loads(body)["id"]
+        for path, payload in (("/api/chats", ["not", "an", "object"]),
+                              ("/api/chats", {"folder": self.folder, "rounds": "abc"}),
+                              ("/api/chats", {"folder": self.folder, "fix_rounds": "x"}),
+                              (f"/api/chats/{cid}/settings", {"rounds": "abc"}),
+                              (f"/api/chats/{cid}/settings", ["x"]),
+                              (f"/api/chats/{cid}/send", {"text": 42}),
+                              ("/api/config", {"teams": [{"name": "T", "agents": [], "rounds": "x"}]}),
+                              ("/api/config", "just a string")):
+            with self.subTest(path=path, payload=payload):
+                code, body = self.req("POST", path, payload)
+                self.assertEqual(code, 400, body)
+                self.assertIn("error", json.loads(body))
+        self.req("POST", f"/api/chats/{cid}/delete", {})
+
+    def test_deleting_a_chat_while_an_agent_replies(self):
+        self.rules({"sleep": 1.5})
+        code, body = self.req("POST", "/api/chats", {"folder": self.folder,
+                                                     "agents": [{"adapter": "claude"}]})
+        cid = json.loads(body)["id"]
+        self.req("POST", f"/api/chats/{cid}/send", {"text": "hello"})
+        for _ in range(100):  # wait until the agent is running
+            if (cid, "claude") in srv.procs:
+                break
+            time.sleep(0.05)
+        self.assertEqual(self.req("POST", f"/api/chats/{cid}/delete", {})[0], 200)
+        for _ in range(200):  # let the worker finish
+            if cid not in srv.workers:
+                break
+            time.sleep(0.05)
+        time.sleep(0.3)
+        self.assertFalse(os.path.exists(srv.chat_path(cid)), "the deleted chat was saved again")
+        self.assertFalse(os.path.exists(os.path.join(srv.CHATS_DIR, cid + ".diffs")))
+        srv.load_all()
+        self.assertNotIn(cid, srv.chats)  # it doesn't come back after a restart
 
 
 if __name__ == "__main__":
