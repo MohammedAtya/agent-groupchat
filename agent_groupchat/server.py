@@ -707,7 +707,7 @@ def stream(chat, bot, cmd, on_event, cwd=None, stdin=None):
         if stdin is not None:  # (a thread, so a full pipe can't block reading the output)
             def feed():
                 try:
-                    p.stdin.write(stdin)
+                    p.stdin.buffer.write(stdin.encode("utf-8"))  # bytes: no \r\n on Windows
                     p.stdin.close()
                 except (OSError, ValueError):
                     pass
@@ -1378,7 +1378,7 @@ def race_context(chat, r):
 
 def ask_copy(chat, bot, folder, prompt, role, stage, users, cap=None):
     """One turn of `bot` in a fresh session in `folder` (a copy). -> (reply, meta).
-    Copies share the user's stash and branches: any that disappear are put back afterwards."""
+    Copies share the user's stash and branches: see copies.check_refs."""
     root = (chat.get("race") or {}).get("root")
     try:
         refs_before = copies.refs_state(root) if root else None
@@ -1410,11 +1410,12 @@ def ask_copy(chat, bot, folder, prompt, role, stage, users, cap=None):
         meta["for"] = users
     if refs_before:
         try:
-            fixed = copies.restore_refs(root, refs_before)
-        except copies.GitError:
-            fixed = []
-        if fixed:
-            meta["warn"] = "it changed your git stash/branches; put back: " + ", ".join(fixed[:5])
+            notes = copies.check_refs(root, refs_before, chat["race"]["base"])
+        except (copies.GitError, KeyError, TypeError):
+            notes = []
+        if notes:  # copies share the user's stash and branches
+            meta["warn"] = "git stash/branches: " + "; ".join(notes[:3])
+            add_msg(chat, "system", "During this turn: " + "; ".join(notes) + ".")
     return reply, meta
 
 

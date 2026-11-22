@@ -346,6 +346,10 @@ def use_copy(root, base, branch, scope="."):
     t_base, t_copy, t_now = _tree(root, base), _tree(root, branch), _tree(root, now)
     plan, clash = [], []
     for st, p in changes:
+        dest = os.path.join(root, *p.split("/"))
+        if p not in t_now and os.path.lexists(dest) and not os.path.isdir(dest):
+            clash.append(p)  # a file git ignores in the user's folder (e.g. a local config)
+            continue
         if p not in user:  # only the copy changed it: take the copy's version exactly
             plan.append((p, t_copy.get(p)))
             continue
@@ -370,7 +374,7 @@ def use_copy(root, base, branch, scope="."):
                 dest = os.path.join(root, *p.split("/"))
                 if os.path.lexists(dest):
                     os.remove(dest)
-                _prune_empty(root, os.path.dirname(dest))
+                _prune_empty(folder, os.path.dirname(dest))
             else:
                 mode, sha = entry
                 data = git_bytes(root, "cat-file", "blob", sha) if mode == "120000" \
@@ -382,10 +386,10 @@ def use_copy(root, base, branch, scope="."):
     return True, files, ""
 
 
-def _prune_empty(root, folder):
-    """Remove folders left empty by deletions (up to the repo's top)."""
-    root = os.path.realpath(root)
-    while os.path.realpath(folder).startswith(root + os.sep):
+def _prune_empty(stop, folder):
+    """Remove folders left empty by deletions, up to (not including) `stop`, the chat's folder."""
+    stop = os.path.realpath(stop)
+    while os.path.realpath(folder).startswith(stop + os.sep):
         try:
             os.rmdir(folder)
         except OSError:
@@ -403,7 +407,7 @@ def _rollback(root, paths, tree_now):
                 _write(root, p, mode, git_bytes(root, "cat-file", "blob", sha) if mode == "120000"
                        else _checkout_bytes(root, p, sha))
             elif os.path.lexists(dest) and not os.path.isdir(dest):
-                os.remove(dest)
+                os.remove(dest)  # (only paths that weren't there: ignored files are refused above)
         except (OSError, GitError):
             pass
 
@@ -453,24 +457,34 @@ def refs_state(root):
     return stash, branches
 
 
-def restore_refs(root, before):
-    """Put back stash entries and branches that disappeared during an agent's turn. Never
-    undoes anything else (the user may be committing in their own folder meanwhile).
-    -> what was restored."""
+def check_refs(root, before, base):
+    """After an agent's turn in a copy (copies share the user's stash and branches):
+    - stash entries made inside a copy are dropped: the user's next `git stash pop` must never
+      bring an agent's unapproved work into their folder (a copy's stash has the snapshot `base`
+      in its history; the user's own don't);
+    - stash entries or branches that disappeared are NOT put back (it may have been the user),
+      but reported with the command that restores them.
+    -> lines for a note (empty if nothing happened)."""
     stash_before, branches_before = before
     stash_now, branches_now = refs_state(root)
-    fixed = []
+    notes = []
+    for i in reversed(range(len(stash_now))):  # drop from the end so the indexes stay valid
+        sha, _, msg = stash_now[i].partition(" ")
+        parent = git(root, "rev-parse", "-q", "--verify", f"{sha}^1", check=False).strip()
+        if parent and run(root, "merge-base", "--is-ancestor", base, parent).returncode == 0:
+            git(root, "stash", "drop", "-q", f"stash@{{{i}}}", check=False)
+            notes.append(f"removed a stash entry an agent made in its copy ({msg or sha[:8]})")
     have = {l.split(" ", 1)[0] for l in stash_now}
-    for line in reversed(stash_before):  # oldest first, so the order stays the same
+    for line in stash_before:
         sha, _, msg = line.partition(" ")
         if sha not in have:
-            git(root, "stash", "store", "-m", msg or "restored by agent-groupchat", sha, check=False)
-            fixed.append(f"stash {msg or sha[:8]}")
+            notes.append(f"a stash entry disappeared ({msg or sha[:8]}); if that wasn't you: "
+                         f"git stash store -m \"{msg}\" {sha}")
     for name, sha in branches_before.items():
         if name not in branches_now:
-            git(root, "update-ref", name, sha, check=False)
-            fixed.append(f"branch {name[len('refs/heads/'):]}")
-    return fixed
+            short = name[len("refs/heads/"):]
+            notes.append(f"branch {short} disappeared; if that wasn't you: git branch {short} {sha}")
+    return notes
 
 
 def remove_worktree(root, path):

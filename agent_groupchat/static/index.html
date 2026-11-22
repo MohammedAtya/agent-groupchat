@@ -704,7 +704,9 @@ function actions(m, idx, failed) {
   };
   btn('↩ Reply', `Write to ${names[m.who] || m.who} only`, () => {
     const t = $('t'); t.value = `@${m.who} ` + t.value.replace(/^@[\w-]+\s*/, ''); t.focus(); updateTo(); });
-  if (failed && !m.retried)
+  const meta0 = m.meta || {};  // Race/Split replies other than a racer's or a part's can't be retried
+  const noRetry = meta0.race || (meta0.copy && !['race', 'part'].includes(meta0.stage));
+  if (failed && !m.retried && !noRetry)
     btn('↻ Retry', `Ask ${names[m.who] || m.who} again`, async () => {
       const r = await api(`/api/chats/${current}/retry`, {index: idx});
       if (r.error) alert(r.error); else refresh(); }, 'retry');

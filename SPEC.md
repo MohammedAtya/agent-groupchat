@@ -319,8 +319,10 @@ Two ways for agents that can edit to work **at the same time**, each in **its ow
 
 ### 14.5b Known limits of the copies
 - Copies are git worktrees, so they **share the user's stash and branches**. Agents in a copy are told
-  not to use `git stash` or touch branches, and after each of their turns the app puts back any stash
-  entry or branch that disappeared (it never undoes anything else).
+  not to use `git stash` or touch branches. After each of their turns the app removes stash entries
+  made inside a copy (so the user's `git stash pop` never brings in unapproved work), and if a stash
+  entry or branch disappeared it doesn't undo that (it may have been the user) but posts the command
+  that restores it.
 - **Submodules aren't copied** (they're empty in the copies); the chat says so when a Race/Split starts.
 - Projects with **symlinks that lead outside them** can't use Race/Split.
 

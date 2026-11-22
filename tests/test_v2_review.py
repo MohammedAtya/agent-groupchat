@@ -418,23 +418,59 @@ class SecondReview(RaceTest):
         self.assertEqual(srv.race_action(c, {"action": "use", "copy": "codex"})[0], 200)
         self.assertEqual(os.stat(os.path.join(self.folder, "app.py")).st_mode & 0o777, 0o600)
 
-    def test_n8_stash_and_branches_are_put_back(self):
+    def test_n8_x3_x4_stash_and_branches(self):
         write(os.path.join(self.folder, "app.py"), "wip\n")
-        git(self.folder, "stash", "-q")
+        git(self.folder, "stash", "-q")                     # the user's own stash entry
         git(self.folder, "branch", "feature")
-        self.rules({"style": "codex", "if": "(⚡ Race: you and", "write": {"app.py": "codex\n"},
-                    "reply": "done"}, *RACE_RULES)
         c = self.chat(agents=RACE_TEAM)
         srv.start_race(c, "build it")
         r = c["race"]
         before = cp.refs_state(r["root"])
-        git(self.folder, "stash", "drop", "-q")  # what an agent's `git stash pop` would do
-        git(self.folder, "branch", "-D", "feature")
-        fixed = cp.restore_refs(r["root"], before)
-        self.assertEqual(len(fixed), 2)
-        self.assertIn("stash@{0}", git(self.folder, "stash", "list"))
-        self.assertIn("feature", git(self.folder, "branch", "--list", "feature"))
+        copy = srv.worktree_dir(c, "codex")
+        cp.make_copy(r["root"], r["base"], copy, "agent/x/codex")
+        write(os.path.join(copy, "app.py"), "agent wip\n")
+        git(copy, "stash", "-q")                            # an agent stashes inside its copy
+        git(self.folder, "branch", "-D", "feature")         # the user deletes a branch meanwhile
+        notes = cp.check_refs(r["root"], before, r["base"])
+        stash = git(self.folder, "stash", "list")
+        self.assertEqual(stash.count("stash@"), 1)          # the agent's entry is gone, the user's stays
+        git(self.folder, "stash", "pop", "-q")
+        self.assertEqual(self.read(self.folder, "app.py"), "wip\n")  # never the agent's work
+        self.assertEqual(git(self.folder, "branch", "--list", "feature"), "")  # not undone
+        self.assertTrue(any("removed a stash entry" in n for n in notes))
+        self.assertTrue(any("git branch feature" in n for n in notes))  # how to restore it
         self.assertIn("don't use git stash", srv.intro("codex", c, "/some/copy"))
+        cp.remove_copies(r["root"], [copy], ["agent/x/codex"])
+
+    def test_x1_ignored_user_file_is_never_overwritten(self):
+        with open(os.path.join(self.folder, ".gitignore"), "w") as f:
+            f.write("config.local\n")
+        git(self.folder, "add", ".gitignore")
+        git(self.folder, *IDENT, "commit", "-q", "-m", "ignore")
+        write(os.path.join(self.folder, "config.local"), "USER SECRET\n")
+        self.rules({"style": "codex", "if": "(⚡ Race: you and",
+                    "write": {".gitignore": "", "config.local": "agent default\n"}, "reply": "done"}, *RACE_RULES)
+        c, r = self.race()
+        code, out = srv.race_action(c, {"action": "use", "copy": "codex"})
+        self.assertEqual(code, 409)
+        self.assertIn("config.local", out["clash"])
+        self.assertEqual(self.read(self.folder, "config.local"), "USER SECRET\n")
+
+    def test_x2_the_chats_own_folder_is_never_removed(self):
+        root = self.folder
+        app = os.path.join(root, "app")
+        write(os.path.join(app, "only.py"), "x\n")
+        git(root, "add", "-A")
+        git(root, *IDENT, "commit", "-q", "-m", "app")
+        base = cp.snapshot(app, "refs/agent-groupchat/x2/base")
+        copy = os.path.join(srv.DATA_DIR, "worktrees", "x2", "a")
+        folder = cp.make_copy(root, base, copy, "agent/x2/a", "app")
+        os.remove(os.path.join(folder, "only.py"))
+        cp.save_copy(copy)
+        ok, files, why = cp.use_copy(root, base, "agent/x2/a", "app")
+        self.assertTrue(ok, why)
+        self.assertTrue(os.path.isdir(app))
+        cp.remove_copies(root, [copy], ["agent/x2/a"], ["refs/agent-groupchat/x2/base"])
 
     def test_n11_restart_clears_running_statuses(self):
         c = self.chat(agents=RACE_TEAM)
