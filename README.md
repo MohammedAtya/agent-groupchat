@@ -1,7 +1,8 @@
 # agent-groupchat: you + your AI agents
 
 > 🚧 This is being turned into **agent-groupchat**: any AIs you have, several copies of each, and roles
-> with real permissions. See [SPEC.md](SPEC.md). For now the agents can be Claude Code and Codex.
+> with real permissions. See [SPEC.md](SPEC.md). Agents can be Claude Code, Codex, Gemini CLI, Aider,
+> or any OpenAI-compatible chat API (OpenAI, Ollama, OpenRouter, Groq, LM Studio…).
 
 Start it with:  `python3 -m agent_groupchat`  (from this folder)  →  http://127.0.0.1:8765  (change the port with `GROUPCHAT_PORT`)
 
@@ -47,18 +48,35 @@ Start it with:  `python3 -m agent_groupchat`  (from this folder)  →  http://12
 - Chats are saved in `~/.agent-groupchat/chats/` (override with `AGENT_GROUPCHAT_HOME`). Deleting a chat on the page doesn't delete the
   agents' sessions themselves.
 
+## Adding agents
+Claude Code, Codex, Gemini CLI and Aider are used if they're installed (New chat marks the ones
+that aren't). **Aider needs a model name** (e.g. `sonnet`, `gpt-4.1`, `ollama_chat/llama3.1`); it
+runs with every prompt answered automatically, so shell commands, git commits, `.gitignore` edits
+and self-updates are switched off, and its history files live in `~/.agent-groupchat/sessions/`.
+
+**Chat APIs** (talk only: they see the chat, not your files) go in `~/.agent-groupchat/config.json`:
+```json
+{"apis": [
+  {"id": "llama", "name": "Llama", "base_url": "http://localhost:11434/v1", "model": "llama3.1"},
+  {"id": "gpt", "name": "GPT", "base_url": "https://api.openai.com/v1", "model": "gpt-4.1",
+   "key_env": "OPENAI_API_KEY"}
+]}
+```
+`key_env` is the **name** of the environment variable that holds the key; the key itself is never
+stored. (A settings page for all of this comes later.)
+
 ## Roles and permissions
 Each role has a default permission; under **Team** you can raise or lower it per agent (⚠ = raised).
 An agent with two roles gets the higher default. **🔒 Lock** drops every agent to *Talk only* at once.
 The same agent can't be Lead and Reviewer (two copies of one AI can).
 
-| Permission | Claude Code | Codex |
-|---|---|---|
-| Talk only | no tools at all | read-only sandbox (can't hide files from Codex), told to only discuss |
-| Read | read/search tools, skills, `git diff/log/status`, tests (in the sandbox) | read-only sandbox |
-| Edit files | edit tools in the folder, **no** commands | not possible (no such setting) |
-| Edit + run commands | edits + commands, sandboxed to the folder | `workspace-write` sandbox |
-| Auto | Claude Code auto mode: risky actions blocked by the classifier | "approve for me": sandboxed, and its automatic reviewer approves or denies anything blocked |
+| Permission | Claude Code | Codex | Gemini CLI | Aider | Chat API |
+|---|---|---|---|---|---|
+| Talk only | no tools at all | read-only sandbox, told to only discuss | every tool denied | ask mode, told to only discuss | ✓ (no tools) |
+| Read | read/search tools, skills, `git diff/log/status`, tests (in the sandbox) | read-only sandbox | read/search tools | ask mode | – |
+| Edit files | edit tools in the folder, **no** commands | – (no such setting) | `auto_edit`: edits, no shell | code mode, no shell, no commits | – |
+| Edit + run commands | edits + commands, sandboxed to the folder | `workspace-write` sandbox | `yolo` inside Gemini's sandbox (needs Docker/Podman; Seatbelt on macOS) | – (no sandbox) | – |
+| Auto | auto mode, risky actions blocked by the classifier | "approve for me" + automatic reviewer | – | – | – |
 
 Defaults: Planner, Critic, Reviewer → Read; Lead, Tester, Participant → Edit + run commands.
 A permission an AI can't enforce is greyed out. Without a working sandbox, "Edit + run commands"

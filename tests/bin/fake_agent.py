@@ -20,14 +20,17 @@ import uuid
 started = time.time()
 
 style, argv = sys.argv[1], sys.argv[2:]
-prompt = argv[-1] if argv else ""
+prompt = argv[-1] if argv else ""  # (gemini: --prompt is last too)
+if style == "aider":  # the message is in a file
+    with open(argv[argv.index("--message-file") + 1]) as f:
+        prompt = f.read()
 if os.environ.get("FAKE_LOG"):
     with open(os.environ["FAKE_LOG"], "a") as f:
         f.write(json.dumps({"style": style, "argv": argv, "cwd": os.getcwd()}) + "\n")
 
 rule = {}
 for r in json.loads(os.environ.get("FAKE_RULES") or "[]"):
-    if r.get("style", style) == style and r.get("if", "") in "\n".join(argv):
+    if r.get("style", style) == style and r.get("if", "") in "\n".join(argv + [prompt]):
         rule = r
         break
 if rule.get("sleep"):
@@ -45,6 +48,45 @@ for path, text in writes.items():
 def emit(ev):
     print(json.dumps(ev), flush=True)
 
+
+if style == "gemini":
+    sid = argv[argv.index("--session-id") + 1] if "--session-id" in argv else \
+        argv[argv.index("--resume") + 1]
+    emit({"type": "init", "session_id": sid, "model": "fake"})
+    if rule.get("exit"):
+        print("fake failure", file=sys.stderr)
+        emit({"type": "result", "status": "error", "error": {"message": "quota exceeded"},
+              "stats": {}})
+        sys.exit(rule["exit"])
+    for p in writes:
+        emit({"type": "tool_use", "tool_name": "write_file", "tool_id": "t1",
+              "parameters": {"file_path": os.path.abspath(p), "content": "..."}})
+        emit({"type": "tool_result", "tool_id": "t1", "status": "success"})
+    for i, w in enumerate(reply.split(" ")):
+        emit({"type": "message", "role": "assistant", "content": (" " if i else "") + w,
+              "delta": True})
+    emit({"type": "result", "status": "success",
+          "stats": {"input_tokens": 30, "output_tokens": 4, "total_tokens": 34}})
+    sys.exit(0)
+
+if style == "aider":  # plain-text output; the reply goes to its chat-history file
+    hist = argv[argv.index("--chat-history-file") + 1]
+    with open(argv[argv.index("--message-file") + 1]) as f:
+        message = f.read()
+    print("Aider v0.86.2\nModel: fake with whole edit format")
+    if rule.get("exit"):  # like the real Aider: the model call failed, exit code may be 0
+        print("litellm.APIError: fake failure")
+        sys.exit(0 if rule["exit"] == "zero" else rule["exit"])
+    with open(hist, "a") as f:
+        f.write("\n# aider chat started at 2026-11-22 10:00:00\n\n")
+        f.write("".join(f"#### {l}\n" for l in message.splitlines()) + "\n")
+        f.write(reply + "\n\n")
+        for p in writes:
+            f.write(f"> Applied edit to {p}\n")
+    print(reply)
+    for p in writes:
+        print(f"Applied edit to {p}")
+    sys.exit(0)
 
 if rule.get("exit"):
     print("fake failure", file=sys.stderr)

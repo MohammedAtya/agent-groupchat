@@ -789,10 +789,16 @@ $('del').onclick = async () => {
 function agentRow(spec = {}) {
   const row = document.createElement('div'); row.className = 'agentRow';
   const sel = document.createElement('select'); sel.className = 'ad';
-  for (const a of adapters) { const o = document.createElement('option'); o.value = a.id; o.textContent = a.name; sel.append(o); }
-  sel.value = spec.adapter || (adapters[0] || {}).id;
+  for (const a of adapters) {
+    const o = document.createElement('option'); o.value = a.id;
+    o.textContent = a.name + (a.api ? ' (API)' : a.installed ? '' : ' (not installed)'); sel.append(o);
+  }
+  sel.value = spec.adapter || (adapters.find(a => a.installed) || adapters[0] || {}).id;
   const nm = document.createElement('input'); nm.className = 'nm'; nm.placeholder = 'Name (optional)'; nm.maxLength = 40;
-  const md = document.createElement('input'); md.className = 'md'; md.placeholder = 'Model (optional)'; md.maxLength = 80;
+  const md = document.createElement('input'); md.className = 'md'; md.maxLength = 80;
+  const hintModel = () => { const a = adapters.find(x => x.id === sel.value) || {};
+    md.placeholder = a.needs_model ? 'Model (required)' : 'Model (optional)'; };
+  sel.addEventListener('change', hintModel); hintModel();
   const rl = document.createElement('select'); rl.className = 'rl'; rl.title = 'Role (more roles under Team)';
   for (const r of roles) {
     const o = document.createElement('option'); o.value = r.id; o.title = r.job || '';
@@ -810,7 +816,8 @@ $('addAgent').onclick = () => {
 $('newBtn').onclick = () => {
   $('nTitle').value = ''; $('nFolder').value = home || '~'; $('err').textContent = '';
   $('nAgents').textContent = ''; $('nLock').checked = false;
-  for (const id of ['claude', 'codex'].filter(id => adapterNames[id])) agentRow({adapter: id});
+  const ready = ['claude', 'codex', 'gemini'].filter(id => (adapters.find(a => a.id === id) || {}).installed);
+  for (const id of ready.slice(0, 2)) agentRow({adapter: id});
   if (!$('nAgents').children.length) agentRow();
   $('dlg').showModal(); $('nFolder').focus();
 };

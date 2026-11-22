@@ -87,7 +87,7 @@ class Http(ChatTest):
         self.assertEqual(chat["colors"]["codex"], "#10a37f")
         self.assertEqual(chat["resume"], {})
         listing = json.loads(self.req("GET", "/api/chats")[1])
-        self.assertEqual([a["id"] for a in listing["adapters"]], ["claude", "codex"])
+        self.assertEqual([a["id"] for a in listing["adapters"]][:2], ["claude", "codex"])
         self.req("POST", f"/api/chats/{cid}/delete", {})
 
     def test_bad_agents_are_rejected(self):
@@ -128,6 +128,18 @@ class Http(ChatTest):
         self.assertIn("planner", [r["id"] for r in listing["roles"]])
         self.assertEqual(self.req("POST", f"/api/chats/{cid}/go", {})[0], 409)  # nothing waits
         self.req("POST", f"/api/chats/{cid}/delete", {})
+
+
+    def test_adapter_test_endpoint(self):
+        code, body = self.req("GET", "/api/adapters/claude/test")
+        self.assertEqual(code, 200)
+        self.assertEqual(json.loads(body)["ok"], True)  # the fake claude answers --version
+        r = json.loads(self.req("GET", "/api/adapters/nope/test")[1])
+        self.assertEqual(r["ok"], False)
+        listing = json.loads(self.req("GET", "/api/chats")[1])
+        aider = next(a for a in listing["adapters"] if a["id"] == "aider")
+        self.assertTrue(aider["needs_model"])
+        self.assertEqual(aider["levels"], ["talk", "read", "edit"])
 
 
 if __name__ == "__main__":

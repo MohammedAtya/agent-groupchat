@@ -1,0 +1,6 @@
+# Gemini CLI policy for the "Talk only" level: deny every tool (MCP tools too).
+[[rule]]
+toolName = "*"
+decision = "deny"
+priority = 999
+denyMessage = "Talk only: no tools in this group chat turn."

@@ -134,13 +134,16 @@ New chat screen **grey that combination out and give the reason**. The app never
 
 | Level | Claude Code | Codex | Gemini CLI | Aider | Chat API |
 |---|---|---|---|---|---|
-| talk | ✅ no tools | ✅ read-only + told not to touch files¹ | ✅ | ✅ ask mode | ✅ |
-| read | ✅ read tools | ✅ `read-only` sandbox | ✅² | ❌ | ❌ |
-| edit | ✅ edit tools, no Bash | ⚠ weak (no "edit but no commands" switch)¹ | ✅² | ✅ | ❌ |
-| edit + commands | ✅ sandboxed Bash | ✅ `workspace-write` | ✅ with its sandbox² | ❌ no sandbox | ❌ |
-| auto | ✅ auto mode | ✅ approve-for-me | ❌ | ❌ | ❌ |
+| talk | ✅ `--tools ""` (no tools) | ⚠ read-only sandbox, told to only discuss¹ | ✅ policy denying every tool | ⚠ ask mode, told to only discuss¹ | ✅ (has no tools) |
+| read | ✅ read tools + `git diff/log/status`, tests in the sandbox | ✅ `read-only` sandbox | ✅ `--approval-mode default` | ✅ ask mode | ❌ |
+| edit | ✅ edit tools, no Bash | ❌ no "edit but no commands" setting | ✅ `--approval-mode auto_edit` | ✅ code mode, shell commands off, no auto-commits | ❌ |
+| edit + commands | ✅ sandboxed Bash (bubblewrap / macOS) | ✅ `workspace-write` (bubblewrap / macOS) | ✅ `yolo` inside `--sandbox` (needs Docker/Podman, or Seatbelt on macOS) | ❌ no sandbox | ❌ |
+| auto | ✅ auto mode | ✅ approve-for-me (needs the sandbox) | ❌ | ❌ | ❌ |
 
-¹ Backed by the after-reply check (§5.4). ² Exact Gemini CLI / Aider flags are checked against their current docs in M4; this table gets updated then.
+¹ The AI can still read files; it's told to only discuss, and the after-reply check (§5.4) flags any change.
+A level an AI can't enforce is greyed out; a level that needs a missing sandbox drops to the next
+level down, and the agent's chip says *(limited)* with the reason. Verified against Claude Code 2.1,
+Codex CLI 0.171, Gemini CLI 0.70 (installed source) and Aider 0.86 (docs + source).
 
 ### 5.4 After-reply check
 After every reply, the app compares the folder before and after. If an agent changed files its level didn't allow

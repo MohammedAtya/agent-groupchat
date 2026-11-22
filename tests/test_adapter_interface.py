@@ -7,6 +7,7 @@ import unittest
 
 import tests.helpers  # noqa: F401  (puts the fake CLIs on PATH)
 from agent_groupchat.adapters import ADAPTERS, RunContext
+from agent_groupchat.roles import LEVELS
 
 
 def make_ctx(folder, session=None):
@@ -18,12 +19,16 @@ def make_ctx(folder, session=None):
     def stream(cmd, on_event):
         p = subprocess.run(cmd, cwd=folder, capture_output=True, text=True)
         for line in p.stdout.splitlines():
-            on_event(json.loads(line))
+            try:
+                on_event(json.loads(line))
+            except ValueError:
+                on_event({"type": "_text", "text": line})
         return p.returncode, p.stderr[-800:].strip(), None
 
     ctx = RunContext(folder=folder, session=session, system_prompt="INTRO",
                      save_session=seen["sessions"].append, step=seen["steps"].append,
-                     preview=preview, stream=stream)
+                     preview=preview, stream=stream, model="fake-model",
+                     state_dir=os.path.join(folder, ".state"))
     return ctx, seen
 
 
@@ -59,7 +64,8 @@ class StandaloneAdapters(unittest.TestCase):
                 self.assertRegex(adapter.color, r"^#[0-9a-f]{6}$")
                 self.assertIn("TALK ONLY", adapter.mode_text("talk"))
                 self.assertIn("abc", adapter.resume_hint("abc"))
-                self.assertIn(adapter.skill_syntax, ("slash", "dollar"))
+                self.assertIn(adapter.skill_syntax, ("slash", "dollar", "none"))
+                self.assertTrue(adapter.levels and set(adapter.levels) <= set(LEVELS))
 
 
 if __name__ == "__main__":

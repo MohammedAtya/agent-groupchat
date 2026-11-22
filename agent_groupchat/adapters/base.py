@@ -5,6 +5,8 @@ RunContext (folder, session, callbacks for live progress) plus the prompt and th
 permission level, and gets back the reply text and its stats.
 """
 import os
+import shutil
+import subprocess
 from dataclasses import dataclass
 from typing import Callable, Optional
 
@@ -23,6 +25,7 @@ class RunContext:
     # It owns the process, so the user's Stop button and the timeout work for every agent.
     model: Optional[str] = None      # model for this agent, or None for the CLI's default
     sandbox: bool = False            # is the OS command sandbox (bubblewrap) working?
+    state_dir: str = ""              # where an adapter may keep its own state (chat APIs: history)
 
 
 TALK_TEXT = "TALK ONLY: discuss only; don't open, change or run anything."
@@ -73,6 +76,41 @@ class Adapter:
     def resume_hint(self, session):
         """Terminal command that continues this session, e.g. 'claude -r <id>'."""
         return ""
+
+    command = []  # the CLI, e.g. ["claude"] (tests point it at a fake)
+
+    def installed(self):
+        return bool(self.command) and shutil.which(self.command[0]) is not None
+
+    def detect(self):
+        """(ok, message) for the Test button. Default: the CLI runs `--version`. No tokens spent."""
+        if not self.installed():
+            return False, f"`{self.command[0] if self.command else self.id}` isn't installed (not on PATH)."
+        try:
+            r = subprocess.run([*self.command, "--version"], capture_output=True, text=True,
+                               timeout=20, stdin=subprocess.DEVNULL)
+        except Exception as e:
+            return False, f"`{self.command[0]} --version` failed: {e}"
+        out = (r.stdout or r.stderr).strip().splitlines()
+        return r.returncode == 0, (out[0] if out else f"exit code {r.returncode}")
+
+
+class MissingAdapter(Adapter):
+    """Stands in for an AI that a chat uses but that isn't configured anymore."""
+    kind = "an AI that isn't configured anymore"
+
+    def __init__(self, id):
+        self.id, self.name = id, id
+
+    def installed(self):
+        return False
+
+    def run(self, ctx, prompt, level):
+        return (f"(error) This agent's AI ({self.id}) isn't configured anymore. Add it back in "
+                "the settings, or remove the agent from this chat."), {}
+
+    def detect(self):
+        return False, f"{self.id} isn't configured."
 
 
 # ---------------------------------------------------------------- helpers for adapters

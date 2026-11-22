@@ -29,7 +29,8 @@ import difflib
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from .adapters import ADAPTERS, RunContext
+from .adapters import ADAPTERS, RunContext, load_adapters
+from .adapters import get as get_adapter
 from .adapters.base import rel
 from .roles import (BUILTIN, DEFAULT_ROLE, FORBIDDEN_PAIRS, LEVEL_NAMES, LEVELS, STAGES,
                     all_roles, is_test_file, rank)
@@ -126,7 +127,7 @@ def migrate(c):
         for a in c["agents"]:
             if a["level"] is None:
                 a["level"] = "read" if mode == "talk" else \
-                    ("auto" if "auto" in ADAPTERS[a["adapter"]].levels else None)
+                    ("auto" if "auto" in get_adapter(a["adapter"]).levels else None)
     lead = c.pop("lead", None)  # before roles: Lead + Review
     ids = agent_ids(c)
     if lead in ids and len(ids) > 1:
@@ -174,6 +175,14 @@ def roles_now():
     return all_roles(CONFIG_FILE)
 
 
+def refresh_adapters():
+    """Pick up chat APIs added to config.json (cheap when it didn't change)."""
+    err = load_adapters(CONFIG_FILE)
+    if err:
+        print(err, flush=True)
+    return err
+
+
 def check_roles_and_level(adapter_id, roles, level, name="this agent"):
     """Validate one agent's roles and permission override. Raises ValueError."""
     known = roles_now()
@@ -196,6 +205,7 @@ def check_roles_and_level(adapter_id, roles, level, name="this agent"):
 def parse_agents(specs):
     """Validate agent specs from the page -> [{adapter, name, model, roles, level}].
     Raises ValueError."""
+    refresh_adapters()
     if not isinstance(specs, list) or not 1 <= len(specs) <= MAX_AGENTS:
         raise ValueError(f"A chat needs 1 to {MAX_AGENTS} agents.")
     out = []
@@ -208,6 +218,9 @@ def parse_agents(specs):
         model = str(sp.get("model") or "").strip()
         if model and not MODEL_RE.match(model):
             raise ValueError(f"Model name {model!r} looks wrong (letters, digits, . : / @ - _ only).")
+        if not model and getattr(ADAPTERS[sp["adapter"]], "needs_model", False):
+            raise ValueError(f"{ADAPTERS[sp['adapter']].name} needs a model name, e.g. sonnet, "
+                             "gpt-4.1 or ollama_chat/llama3.1.")
         roles = [r for r in (sp.get("roles") or []) if r != DEFAULT_ROLE] \
             if isinstance(sp.get("roles") or [], list) else sp.get("roles")
         level = sp.get("level") or None
@@ -250,7 +263,7 @@ def agent(chat, aid):
 
 
 def adapter_of(chat, aid):
-    return ADAPTERS[agent(chat, aid)["adapter"]]
+    return get_adapter(agent(chat, aid)["adapter"])
 
 
 def display(chat, who):
@@ -366,7 +379,7 @@ def intro(bot, chat):
     others = [a for a in chat["agents"] if a["id"] != bot]
 
     def describe(a):
-        bits = [ADAPTERS[a["adapter"]].kind]
+        bits = [get_adapter(a["adapter"]).kind]
         if a["adapter"] == me["adapter"]:
             bits.append("a separate session of the same AI as you")
         if a.get("roles"):
@@ -567,7 +580,9 @@ def stream(chat, bot, cmd, on_event):
             for line in p.stdout:
                 try:
                     ev = json.loads(line)
-                except ValueError:
+                except ValueError:  # plain text (e.g. Aider): adapters that want it read it
+                    ev = {"type": "_text", "text": line.rstrip("\n")}
+                if not isinstance(ev, dict):
                     continue
                 try:
                     on_event(ev)
@@ -609,7 +624,7 @@ def run_agent(chat, bot, prompt, level):
 
     ctx = RunContext(
         folder=chat["folder"], session=chat["sessions"].get(bot), model=agent(chat, bot)["model"],
-        sandbox=sandbox_ok(),
+        sandbox=sandbox_ok(), state_dir=os.path.join(DATA_DIR, "sessions"),
         system_prompt=intro(bot, chat), save_session=save_session,
         step=lambda text: step(chat, bot, text),
         preview=lambda text, append=False: set_text(chat, bot, text, append),
@@ -759,7 +774,7 @@ def ask(chat, bot, extra="", cap=None, role=None, stage="", force=False):
         prompt = f"/{sk['name']} {sk['args']}".strip()
         if ctx.strip():
             prompt += "\n\n(Group-chat messages since your last turn, for context:\n" + ctx + ")"
-    elif sk and syntax == "dollar":
+    elif sk and syntax == "dollar":  # (syntax "none": a chat API has no skills)
         # e.g. Codex runs a skill when the message mentions $name
         shown = [dict(m, text=re.sub(r"/" + re.escape(sk["name"]) + r"\b", "$" + sk["name"],
                                      m["text"], count=1, flags=re.I))
@@ -1269,13 +1284,18 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"error": "forbidden"}, 403)
         p = self.path.split("?")[0]
         if p == "/api/chats":
+            config_error = refresh_adapters()
             with lock:
                 lst = sorted(({**{k: c[k] for k in ("id", "title", "updated", "folder", "lock")},
                                "agents": len(c["agents"])}
                               for c in chats.values()), key=lambda c: -c["updated"])
             return self.send_json({"chats": lst, "home": os.path.expanduser("~"),
                                    "sandbox": sandbox_ok(),
+                                   "config_error": config_error,
                                    "adapters": [{"id": a.id, "name": a.name, "color": a.color,
+                                                 "installed": a.installed(),
+                                                 "needs_model": getattr(a, "needs_model", False),
+                                                 "api": not a.command,
                                                  "levels": list(a.levels),
                                                  "notes": {lv: a.why_not(lv, True) for lv in LEVELS
                                                            if lv not in a.levels}}
@@ -1284,6 +1304,11 @@ class Handler(BaseHTTPRequestHandler):
                                               "job": r.job, "builtin": r.builtin}
                                              for r in roles_now().values()],
                                    "levels": [{"id": lv, "name": LEVEL_NAMES[lv]} for lv in LEVELS]})
+        m = re.fullmatch(r"/api/adapters/([\w-]+)/test", p)
+        if m:  # the Test button: is this AI installed / reachable? (no tokens spent)
+            refresh_adapters()
+            ok, msg = get_adapter(m.group(1)).detect()
+            return self.send_json({"ok": ok, "message": msg})
         m = re.fullmatch(r"/api/chats/(\w+)/skills", p)
         if m:
             c = chats.get(m.group(1))
@@ -1320,7 +1345,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({**c, "typing": typing.get(c["id"], {}),
                                        "aliases": aliases(c),
                                        "perm": {b: level_info(c, b) for b in agent_ids(c)},
-                                       "colors": {a["id"]: ADAPTERS[a["adapter"]].color
+                                       "colors": {a["id"]: get_adapter(a["adapter"]).color
                                                   for a in c["agents"]},
                                        "resume": {b: adapter_of(c, b).resume_hint(sid)
                                                   for b, sid in c["sessions"].items()
@@ -1426,6 +1451,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    refresh_adapters()
     print(f"Group chat on http://127.0.0.1:{PORT}  (data: {DATA_DIR})", flush=True)
     if not sys.stdout.isatty():  # started in the background: keep a log file instead
         sys.stdout = sys.stderr = open(LOG_FILE, "a", buffering=1)
