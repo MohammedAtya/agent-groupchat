@@ -7,7 +7,9 @@ already have (Claude Code, Codex, Gemini CLI, Aider, or any OpenAI-compatible ch
 several copies of the same one, and give each a **role** with **permissions its CLI really
 enforces**.
 
-<!-- demo GIF goes here: ![A chat where a Planner, a Lead and a Reviewer work on a task](https://raw.githubusercontent.com/MohammedAtya/agent-groupchat/main/docs/demo.gif) -->
+![A real chat: Claude 1 plans, you OK the plan, Claude 2 does the work, Codex finds a bug, Claude 2 fixes it, Codex says LGTM](https://raw.githubusercontent.com/MohammedAtya/agent-groupchat/main/docs/demo.gif)
+
+*A real, unscripted run: Claude 1 plans, you press Go ahead, Claude 2 edits and tests, Codex finds a real bug (VERDICT: FIX), Claude 2 fixes it automatically, and Codex approves.*
 
 - **Any mix of agents**: e.g. *Claude 1* (Opus) leads, *Claude 2* (a cheaper model) tests,
   *Codex* reviews, and a local *Llama* via Ollama gives a second opinion.
