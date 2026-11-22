@@ -26,6 +26,7 @@ os.environ["AGENT_GROUPCHAT_LEGACY"] = LEGACY
 os.environ["GROUPCHAT_PORT"] = str(_free_port())
 sys.path.insert(0, ROOT)
 
+from agent_groupchat import platform_support as plat  # noqa: E402
 from agent_groupchat import server as srv  # noqa: E402
 from agent_groupchat.adapters import BUILTIN  # noqa: E402
 
@@ -40,8 +41,10 @@ class ChatTest(unittest.TestCase):
 
     def setUp(self):
         self.folder = os.path.realpath(tempfile.mkdtemp(prefix="gc-test-project-"))
-        self.log = os.path.join(self.folder, "..", os.path.basename(self.folder) + ".log")
+        self.log = self.folder + ".calls"  # a folder of one file per fake run
         os.environ["FAKE_LOG"] = self.log
+        self._blocked = plat.COMMANDS_BLOCKED
+        plat.COMMANDS_BLOCKED = False  # tests act like an OS with a sandbox (Windows CI too)
         os.environ["FAKE_RULES"] = "[]"
         self._orig_sandbox = srv.sandbox_ok
         srv.sandbox_ok = lambda: self.sandbox
@@ -50,10 +53,13 @@ class ChatTest(unittest.TestCase):
     def tearDown(self):
         srv.sandbox_ok = self._orig_sandbox
         shutil.rmtree(self.folder, ignore_errors=True)
-        if os.path.exists(self.log):
-            os.remove(self.log)
+        shutil.rmtree(self.log, ignore_errors=True)
+        plat.COMMANDS_BLOCKED = self._blocked
 
     # -- helpers
+    def reset_calls(self):
+        shutil.rmtree(self.log, ignore_errors=True)
+
     def rules(self, *rules):
         os.environ["FAKE_RULES"] = json.dumps(list(rules))
 
@@ -73,10 +79,12 @@ class ChatTest(unittest.TestCase):
         srv.worker(c)
 
     def calls(self, style=None):
-        if not os.path.exists(self.log):
+        if not os.path.isdir(self.log):
             return []
-        with open(self.log) as f:
-            runs = [json.loads(l) for l in f]
+        runs = []
+        for name in sorted(n for n in os.listdir(self.log) if n.endswith(".json")):
+            with open(os.path.join(self.log, name), encoding="utf-8") as f:
+                runs.append(json.load(f))
         return [r for r in runs if style is None or r["style"] == style]
 
     def replies(self, c, who=None):

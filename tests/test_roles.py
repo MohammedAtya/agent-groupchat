@@ -1,6 +1,7 @@
 """Roles, permission levels and the workflow: Planner -> your OK -> Lead -> Tester -> Reviewer."""
 import json
 import os
+import shutil
 import unittest
 
 from tests.helpers import ChatTest, srv
@@ -121,7 +122,7 @@ class Flow(ChatTest):
     def test_no_fix_round_when_switched_off_or_lgtm(self):
         for fix_rounds, reply in ((0, FIX), (2, LGTM), (2, "No verdict line at all")):
             with self.subTest(fix_rounds=fix_rounds, reply=reply):
-                os.remove(self.log) if os.path.exists(self.log) else None
+                self.reset_calls()
                 self.rules({"style": "codex", "reply": reply})
                 c = self.chat(agents=[a("claude", "lead"), a("codex", "reviewer")],
                               fix_rounds=fix_rounds)
@@ -215,18 +216,21 @@ class PlanPause(ChatTest):
 
 class EditLock(ChatTest):
     def test_editors_take_turns_readers_dont_wait(self):
-        times = os.path.join(self.folder, "..", os.path.basename(self.folder) + ".times")
+        times = self.folder + ".times"
         os.environ["FAKE_TIMES"] = times
         self.rules({"sleep": 0.4})
         try:
             c = self.chat(agents=[a("claude", level="work"), a("claude", level="work"),
                                   a("claude", level="read")])
             self.send(c, "hello")
-            with open(times) as f:
-                runs = {caller(json.loads(l)): json.loads(l) for l in f}
+            runs = {}
+            for name in os.listdir(times):
+                with open(os.path.join(times, name), encoding="utf-8") as f:
+                    r = json.load(f)
+                runs[caller(r)] = r
         finally:
             os.environ.pop("FAKE_TIMES")
-            os.remove(times)
+            shutil.rmtree(times, ignore_errors=True)
 
         def overlap(x, y):
             return runs[x]["start"] < runs[y]["end"] and runs[y]["start"] < runs[x]["end"]

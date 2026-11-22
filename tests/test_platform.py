@@ -71,7 +71,7 @@ class Paths(unittest.TestCase):
 
 class NativeWindowsLevels(ChatTest):
     def test_no_commands_or_auto_on_native_windows(self):
-        with mock.patch.object(plat, "IS_WINDOWS", True):
+        with mock.patch.object(plat, "COMMANDS_BLOCKED", True):
             c = self.chat(agents=[{"adapter": "claude", "level": "auto"},
                                   {"adapter": "codex", "roles": ["lead"]}])
             cl, cx = srv.level_info(c, "claude"), srv.level_info(c, "codex")

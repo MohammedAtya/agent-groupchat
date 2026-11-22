@@ -322,13 +322,13 @@ def level_info(chat, aid):
 
 
 def can_use(ad, level, sandbox):
-    if plat.IS_WINDOWS and level in ("work", "auto"):
+    if plat.COMMANDS_BLOCKED and level in ("work", "auto"):
         return False
     return ad.available(level, sandbox)
 
 
 def why_not(ad, level, sandbox):
-    if plat.IS_WINDOWS and level in ("work", "auto") and level in ad.levels:
+    if plat.COMMANDS_BLOCKED and level in ("work", "auto") and level in ad.levels:
         return plat.WINDOWS_LIMIT
     return ad.why_not(level, sandbox)
 

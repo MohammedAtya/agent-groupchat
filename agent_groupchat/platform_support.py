@@ -16,6 +16,7 @@ IS_WINDOWS = os.name == "nt"        # native Windows (WSL reports Linux)
 IS_MAC = SYSTEM == "Darwin"
 IS_WSL = SYSTEM == "Linux" and "microsoft" in platform.release().lower()
 # On native Windows the agents' command sandboxes don't work, so commands and auto mode are off.
+COMMANDS_BLOCKED = IS_WINDOWS
 WINDOWS_LIMIT = ("isn't available on native Windows (the agents can't sandbox commands there); "
                  "run agent-groupchat inside WSL for it")
 

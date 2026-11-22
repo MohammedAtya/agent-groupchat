@@ -4,8 +4,10 @@
 Usage: fake_agent.py claude|codex <the real CLI's arguments...>
 It prints the same kind of JSON event stream as the real CLI, so the app's real
 adapter code parses it. Controlled by environment variables:
-  FAKE_LOG    append one JSON line per run: {"style", "argv", "cwd"}
-  FAKE_TIMES  append one JSON line per run with its start and end time (for overlap tests)
+  FAKE_LOG    a folder: one JSON file per run {"style", "argv", "cwd"}, named so they sort by
+              start time (one file each, because agents run at the same time and appends to
+              one shared file can interleave on Windows)
+  FAKE_TIMES  a folder: one JSON file per run with its start and end time (for overlap tests)
   FAKE_RULES  JSON list of {"style"?, "if"?, "reply"?, "write"?: {path: text}, "exit"?: code,
               "sleep"?: seconds};
               the first rule whose style matches and whose "if" text is in its arguments
@@ -28,9 +30,19 @@ prompt = argv[-1] if argv else ""  # (gemini: --prompt is last too)
 if style == "aider":  # the message is in a file
     with open(argv[argv.index("--message-file") + 1], encoding="utf-8") as f:
         prompt = f.read()
+RUN = f"{time.time_ns():020d}-{os.getpid()}.json"
+
+
+def record(folder, data):
+    os.makedirs(folder, exist_ok=True)
+    tmp = os.path.join(folder, RUN + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+    os.replace(tmp, os.path.join(folder, RUN))
+
+
 if os.environ.get("FAKE_LOG"):
-    with open(os.environ["FAKE_LOG"], "a", encoding="utf-8") as f:
-        f.write(json.dumps({"style": style, "argv": argv, "cwd": os.getcwd()}) + "\n")
+    record(os.environ["FAKE_LOG"], {"style": style, "argv": argv, "cwd": os.getcwd()})
 
 rule = {}
 for r in json.loads(os.environ.get("FAKE_RULES") or "[]"):
@@ -40,8 +52,7 @@ for r in json.loads(os.environ.get("FAKE_RULES") or "[]"):
 if rule.get("sleep"):
     time.sleep(rule["sleep"])
 if os.environ.get("FAKE_TIMES"):
-    with open(os.environ["FAKE_TIMES"], "a", encoding="utf-8") as f:
-        f.write(json.dumps({"argv": argv, "start": started, "end": time.time()}) + "\n")
+    record(os.environ["FAKE_TIMES"], {"argv": argv, "start": started, "end": time.time()})
 reply = rule.get("reply", f"fake {style} reply")
 writes = rule.get("write") or {}
 for path, text in writes.items():
