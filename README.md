@@ -7,7 +7,11 @@
 Start it with:  `python3 -m agent_groupchat`  (from this folder)  →  http://127.0.0.1:8765  (change the port with `GROUPCHAT_PORT`)
 
 - **Sidebar**: all your chats. Click one to reopen it; it reopens the last chat automatically.
-- **New chat**: pick a name, a project folder, the **agents**, a mode and the number of discussion rounds.
+- **New chat**: pick a project folder and the **agents** (AI, name, model, roles, permission), or start
+  from a saved **Team**. **💾 Save as team** keeps a setup for next time (also from a chat's Team dialog).
+- **⚙ Settings**: *Agents* (which CLIs are installed, with a **Test** button; add chat APIs), *Roles*
+  (copy a built-in role or write your own: name, job, default permission), *Teams* (rename, delete).
+- **Old chats**: if you used the earlier `~/groupchat` version, the page offers to import copies of its chats.
 - **Agents**: any number, including several copies of the same AI ("Claude 1", "Claude 2"), each its own
   session. Give them names and, optionally, a model each (e.g. Opus for one copy, Sonnet for another).
 - **@name** anywhere in a message asks only that agent: `@claude-2`, `@claude2`, `@codex`.
@@ -54,7 +58,8 @@ that aren't). **Aider needs a model name** (e.g. `sonnet`, `gpt-4.1`, `ollama_ch
 runs with every prompt answered automatically, so shell commands, git commits, `.gitignore` edits
 and self-updates are switched off, and its history files live in `~/.agent-groupchat/sessions/`.
 
-**Chat APIs** (talk only: they see the chat, not your files) go in `~/.agent-groupchat/config.json`:
+**Chat APIs** (talk only: they see the chat, not your files) are added under **⚙ Settings → Agents**,
+or by hand in `~/.agent-groupchat/config.json`:
 ```json
 {"apis": [
   {"id": "llama", "name": "Llama", "base_url": "http://localhost:11434/v1", "model": "llama3.1"},
@@ -63,7 +68,7 @@ and self-updates are switched off, and its history files live in `~/.agent-group
 ]}
 ```
 `key_env` is the **name** of the environment variable that holds the key; the key itself is never
-stored. (A settings page for all of this comes later.)
+stored (Settings refuses a value that looks like a key).
 
 ## Roles and permissions
 Each role has a default permission; under **Team** you can raise or lower it per agent (⚠ = raised).

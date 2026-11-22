@@ -9,7 +9,8 @@ import unittest
 from tests.helpers import ChatTest, srv
 
 
-class Http(ChatTest):
+class HttpBase(ChatTest):
+    """Runs the real HTTP server on the test port (no tests of its own)."""
     @classmethod
     def setUpClass(cls):
         cls.server = srv.ThreadingHTTPServer(("127.0.0.1", srv.PORT), srv.Handler)
@@ -34,6 +35,7 @@ class Http(ChatTest):
         conn.close()
         return out
 
+class Http(HttpBase):
     def test_page_carries_the_launch_token(self):
         code, body = self.req("GET", "/", token=False)
         self.assertEqual(code, 200)

@@ -20,6 +20,9 @@ import uuid
 started = time.time()
 
 style, argv = sys.argv[1], sys.argv[2:]
+if argv == ["--version"]:  # the Test button
+    print(f"fake {style} 1.0")
+    sys.exit(0)
 prompt = argv[-1] if argv else ""  # (gemini: --prompt is last too)
 if style == "aider":  # the message is in a file
     with open(argv[argv.index("--message-file") + 1]) as f:

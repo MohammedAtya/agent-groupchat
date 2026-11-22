@@ -20,6 +20,8 @@ def _free_port():
 
 # Must be set before the server module is imported (it reads them at import time).
 os.environ["AGENT_GROUPCHAT_HOME"] = DATA
+LEGACY = tempfile.mkdtemp(prefix="gc-test-legacy-")  # never the real ~/groupchat/chats
+os.environ["AGENT_GROUPCHAT_LEGACY"] = LEGACY
 os.environ["GROUPCHAT_PORT"] = str(_free_port())
 os.environ["PATH"] = os.path.join(HERE, "bin") + os.pathsep + os.environ["PATH"]
 sys.path.insert(0, ROOT)

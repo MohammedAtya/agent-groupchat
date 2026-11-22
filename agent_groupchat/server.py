@@ -29,7 +29,8 @@ import difflib
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from .adapters import ADAPTERS, RunContext, load_adapters
+from . import config as cfg
+from .adapters import ADAPTERS, RunContext, load_adapters, parse_apis
 from .adapters import get as get_adapter
 from .adapters.base import rel
 from .roles import (BUILTIN, DEFAULT_ROLE, FORBIDDEN_PAIRS, LEVEL_NAMES, LEVELS, STAGES,
@@ -44,7 +45,10 @@ DATA_DIR = os.path.abspath(os.path.expanduser(
 CHATS_DIR = os.path.join(DATA_DIR, "chats")
 LOGS_DIR = os.path.join(DATA_DIR, "logs")
 LOG_FILE = os.path.join(LOGS_DIR, "server.log")
-CONFIG_FILE = os.path.join(DATA_DIR, "config.json")  # custom roles (settings page: M5)
+CONFIG_FILE = os.path.join(DATA_DIR, "config.json")  # chat APIs, custom roles, teams
+# Chats of the old single-folder version (~/groupchat), offered for a one-time import (copied).
+LEGACY_CHATS_DIR = os.path.abspath(os.path.expanduser(
+    os.environ.get("AGENT_GROUPCHAT_LEGACY") or os.path.join("~", "groupchat", "chats")))
 PORT = int(os.environ.get("GROUPCHAT_PORT", "8765"))
 BOT_TIMEOUT = 900  # seconds per reply (work mode can take a while)
 MAX_AGENTS = 12
@@ -357,6 +361,82 @@ def permission_text(chat, bot):
 
 def role_names(chat, aid):
     return [r.name for r in role_list(chat, aid)]
+
+
+# ---------------------------------------------------------------- settings (config.json)
+def check_team(t):
+    """A saved team from the page -> clean dict. Raises ValueError."""
+    if not isinstance(t, dict):
+        raise ValueError(f"Each team must be an object: {t!r}")
+    name = str(t.get("name") or "").strip()
+    if not cfg.TEAM_RE.match(name) or not name.strip(" .,'+&()/-"):
+        raise ValueError(f"Team name {name!r}: 1-40 letters, digits, spaces and . , ' + & ( ) / -")
+    try:
+        agents = parse_agents(t.get("agents"))
+    except ValueError as e:
+        raise ValueError(f"Team {name}: {e}")
+    return {"name": name, "agents": agents, "lock": bool(t.get("lock")),
+            "fix_rounds": max(0, min(MAX_FIX_ROUNDS, int(t.get("fix_rounds", 1)))),
+            "rounds": max(0, min(5, int(t.get("rounds", 1))))}
+
+
+def save_settings(d):
+    """POST /api/config: replace the sections that were sent. Raises ValueError."""
+    sections = {}
+    if "apis" in d:
+        cfg.check_key_env(d["apis"])
+        parse_apis(d["apis"])  # raises on bad entries
+        sections["apis"] = [{k: str(a.get(k) or "").strip() for k in
+                             ("id", "name", "base_url", "model", "key_env")} for a in d["apis"]]
+        for a in sections["apis"]:
+            a["id"] = a["id"].lower()
+    if "roles" in d:
+        sections["roles"] = cfg.check_roles(d["roles"])
+    if "teams" in d:
+        if not isinstance(d["teams"], list):
+            raise ValueError("teams must be a list")
+        teams = [check_team(t) for t in d["teams"]]
+        if len({t["name"].lower() for t in teams}) != len(teams):
+            raise ValueError("Two teams have the same name.")
+        sections["teams"] = teams
+    if sections:
+        cfg.update(CONFIG_FILE, **sections)
+        load_adapters(CONFIG_FILE, force=True)
+
+
+def legacy_files():
+    """Old chats (~/groupchat/chats/*.json) not imported yet, unless the user dismissed it."""
+    if cfg.load(CONFIG_FILE).get("legacy_import") or LEGACY_CHATS_DIR == CHATS_DIR \
+            or not os.path.isdir(LEGACY_CHATS_DIR):
+        return []
+    return sorted(n for n in os.listdir(LEGACY_CHATS_DIR)
+                  if n.endswith(".json") and n[:-5] not in chats)
+
+
+def import_legacy():
+    """Copy the old chats (and their diffs) in; the originals stay where they are."""
+    n = 0
+    for name in legacy_files():
+        cid = name[:-5]
+        try:
+            with open(os.path.join(LEGACY_CHATS_DIR, name)) as f:
+                c = json.load(f)
+            if c.get("id") != cid:
+                continue
+            migrate(c)
+        except Exception as e:
+            print("could not import", name, e)
+            continue
+        diffs = os.path.join(LEGACY_CHATS_DIR, cid + ".diffs")
+        if os.path.isdir(diffs):
+            shutil.copytree(diffs, os.path.join(CHATS_DIR, cid + ".diffs"), dirs_exist_ok=True)
+        with lock:
+            chats[cid] = c
+            typing[cid] = {b: False for b in agent_ids(c)}
+            save(c)
+        n += 1
+    cfg.update(CONFIG_FILE, legacy_import="done")
+    return n
 
 
 def add_msg(chat, who, text, **extra):
@@ -1292,6 +1372,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"chats": lst, "home": os.path.expanduser("~"),
                                    "sandbox": sandbox_ok(),
                                    "config_error": config_error,
+                                   "legacy": {"count": len(legacy_files()), "dir": LEGACY_CHATS_DIR},
                                    "adapters": [{"id": a.id, "name": a.name, "color": a.color,
                                                  "installed": a.installed(),
                                                  "needs_model": getattr(a, "needs_model", False),
@@ -1304,6 +1385,10 @@ class Handler(BaseHTTPRequestHandler):
                                               "job": r.job, "builtin": r.builtin}
                                              for r in roles_now().values()],
                                    "levels": [{"id": lv, "name": LEVEL_NAMES[lv]} for lv in LEVELS]})
+        if p == "/api/config":
+            data = cfg.load(CONFIG_FILE)
+            return self.send_json({"apis": data.get("apis") or [], "roles": data.get("roles") or [],
+                                   "teams": data.get("teams") or []})
         m = re.fullmatch(r"/api/adapters/([\w-]+)/test", p)
         if m:  # the Test button: is this AI installed / reachable? (no tokens spent)
             refresh_adapters()
@@ -1381,6 +1466,17 @@ class Handler(BaseHTTPRequestHandler):
                          (d.get("title") or "").strip(), agents, lock=bool(d.get("lock")),
                          fix_rounds=max(0, min(MAX_FIX_ROUNDS, int(d.get("fix_rounds", 1)))))
             return self.send_json({"id": c["id"]})
+        if p == "/api/config":
+            try:
+                save_settings(d)
+            except (ValueError, TypeError) as e:
+                return self.send_json({"error": str(e)}, 400)
+            return self.send_json({"ok": True})
+        if p == "/api/legacy":
+            if d.get("action") == "import":
+                return self.send_json({"ok": True, "imported": import_legacy()})
+            cfg.update(CONFIG_FILE, legacy_import="dismissed")
+            return self.send_json({"ok": True})
         m = re.fullmatch(r"/api/chats/(\w+)/(send|settings|agents|go|delete|stop|retry|compact)", p)
         c = chats.get(m.group(1)) if m else None
         if not c:

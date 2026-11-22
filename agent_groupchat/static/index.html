@@ -157,25 +157,54 @@
   dialog input, dialog select { width:100%; padding:8px 10px; border-radius:8px;
                                 border:1px solid var(--border); background:var(--bg); }
   dialog .hint { font-size:12px; color:var(--muted); margin-top:4px; }
-  .agentRow { display:flex; gap:6px; margin-bottom:6px; }
-  dialog .agentRow select { width:auto; flex:0 0 110px; } dialog .agentRow input { width:auto; flex:1; min-width:0; }
-  dialog .agentRow select.rl { flex:0 0 120px; }
   dialog label.check { display:flex; gap:6px; align-items:center; color:var(--text); }
   dialog label.check input { width:auto; }
-  .agentRow button, #addAgent { padding:0 10px; border-radius:8px; border:1px solid var(--border);
-                                background:var(--bg); cursor:pointer; }
+  #addAgent { border-radius:8px; border:1px solid var(--border); background:var(--bg); cursor:pointer; margin-top:6px; }
   #addAgent { padding:5px 10px; font-size:13px; }
   dialog .row { display:flex; gap:8px; justify-content:flex-end; margin-top:18px; }
   dialog .row button { padding:8px 14px; border-radius:8px; border:1px solid var(--border);
                        background:var(--bg); cursor:pointer; }
   dialog .row button.go { background:var(--user); color:#fff; border:0; }
   #err { color:#d33; font-size:13px; margin-top:8px; }
+  dialog.wide { width:min(900px, calc(100vw - 32px)); }
+  .agents-table { width:100%; border-collapse:collapse; font-size:13px; }
+  .agents-table th { text-align:left; font-weight:600; color:var(--muted); font-size:12px; padding:2px 4px; }
+  .agents-table td { padding:5px 4px; border-top:1px solid var(--border); vertical-align:top; }
+  .agents-table input, .agents-table select { padding:5px 7px; }
+  .agents-table select.ai { min-width:128px; } #nAgents input:not([type=checkbox]) { min-width:84px; }
+  .agents-table td.roles label { display:inline-flex; gap:3px; align-items:center; margin:0 8px 2px 0;
+                                 color:var(--text); font-size:12px; }
+  .agents-table td.roles input { width:auto; margin:0; }
+  .agents-table .note { font-size:11px; color:var(--muted); margin-top:3px; }
+  .agents-table .note.up { color:var(--warn); } .agents-table .note.lim { color:#c33; }
+  .agents-table button.x { padding:4px 9px; border-radius:8px; border:1px solid var(--border);
+                           background:var(--bg); cursor:pointer; }
+  .inline { display:flex; gap:8px; align-items:center; margin-top:10px; }
+  .inline input { flex:1; }
+  .inline button, .tabs button, .set button.small2 { padding:6px 12px; border-radius:8px; border:1px solid var(--border);
+                                                     background:var(--bg); cursor:pointer; white-space:nowrap; }
+  .ok-msg { color:#1a7f37; font-size:13px; } .bad-msg { color:#d33; font-size:13px; }
+  .warn-msg { color:var(--warn); font-size:12px; margin-top:4px; }
+  /* settings */
+  .tabs { display:flex; gap:6px; margin-bottom:12px; }
+  .tabs button.on { background:var(--user); color:#fff; border-color:var(--user); }
+  .set h3 { font-size:14px; margin:14px 0 6px; }
+  .set textarea { width:100%; min-height:54px; padding:6px 8px; border-radius:8px; border:1px solid var(--border);
+                  background:var(--bg); font-size:13px; resize:vertical; }
+  .set .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:6px; }
+  .set .muted { color:var(--muted); font-size:12px; }
+  #legacy { display:flex; gap:10px; align-items:center; justify-content:center; padding:8px 16px; font-size:13px;
+            background:#eef7ee; color:#1d4d24; border-bottom:1px solid #cfe6cf; }
+  #legacy button { padding:3px 10px; border-radius:7px; border:1px solid #9cc89c; background:#fff; cursor:pointer; }
+  @media (prefers-color-scheme: dark) { #legacy { background:#1b2e1d; color:#cfe8cf; border-color:#2e4a31; }
+                                        #legacy button { background:#20201e; color:inherit; } }
   @media (max-width:700px) { aside { width:200px; } }
 </style>
 </head>
 <body>
 <aside>
-  <div class="top"><button class="primary" id="newBtn">+ New chat</button></div>
+  <div class="top"><button class="primary" id="newBtn">+ New chat</button>
+    <button class="small" id="setBtn" style="width:100%;margin-top:6px">⚙ Settings: agents, roles, teams</button></div>
   <div id="list"></div>
 </aside>
 <main>
@@ -206,6 +235,8 @@
     ⚠ Sandbox unavailable: agents that need it are limited (Codex stays read-only; in "Can work" Claude can edit files but can't run commands, while Auto still lets Claude do everything).
     To fix it, run the one-time sandbox setup from the README.
   </div>
+  <div id="legacy" hidden><span id="legacyText"></span>
+    <button type="button" id="legacyImport">Import copies</button><button type="button" id="legacyNo">Not now</button></div>
   <div id="log"><div class="inner" id="inner"><div class="empty">Pick a chat on the left, or start a new one.</div></div></div>
   <div id="typing"></div>
   <div id="flowbar" hidden><span id="flowtext"></span><button id="goBtn" type="button">▶ Go ahead</button></div>
@@ -219,29 +250,78 @@
   </div>
 </main>
 
-<dialog id="dlg">
+<dialog id="dlg" class="wide">
   <form method="dialog" id="newForm">
     <h2>New group chat</h2>
+    <label for="nTeam">Start from a saved team</label>
+    <select id="nTeam"><option value="">None: set the agents up below</option></select>
     <label for="nTitle">Name (optional)</label>
     <input id="nTitle" placeholder="Named after your first message if empty">
     <label for="nFolder">Project folder</label>
     <input id="nFolder">
     <div class="hint">The agents work here and load this folder's CLAUDE.md / AGENTS.md and project skills.</div>
     <label>Agents</label>
-    <div id="nAgents"></div>
+    <table class="agents-table"><thead><tr><th>AI</th><th>Name</th><th>Model</th><th>Roles</th><th>Permission</th><th></th></tr></thead>
+      <tbody id="nAgents"></tbody></table>
     <button type="button" id="addAgent">+ Add agent</button>
+    <div class="warn-msg" id="nMany" hidden>More than 5 agents: every message costs more and turns get slower.</div>
     <div class="hint">Add several copies of the same AI if you like: each one is its own session. An empty name
       becomes "Claude", or "Claude 1", "Claude 2"… for copies. An empty model uses the CLI's default.
-      Each role comes with a default permission; change permissions later under <b>Team</b>.
-      Roles act in order: Planner + Critic → your OK → Lead → Tester → Reviewer.</div>
+      No role = Participant. Roles act in order: Planner + Critic → your OK → Lead → Tester → Reviewer.
+      Greyed-out permissions can't be enforced for that AI; ⚠ = raised above the role's default.</div>
     <label class="check"><input type="checkbox" id="nLock"> Start with the 🔒 Talk-only lock (nobody touches files)</label>
     <label for="nRounds">Let the agents reply to each other</label>
     <select id="nRounds"><option value="0">Off</option><option value="1" selected>1 round</option>
       <option value="2">2 rounds</option><option value="3">3 rounds</option></select>
+    <label for="nFix">Automatic fix rounds (when the Tester or Reviewer finds problems)</label>
+    <select id="nFix"><option value="0">0</option><option value="1" selected>1</option>
+      <option value="2">2</option><option value="3">3</option></select>
+    <div class="inline"><input id="nTeamName" placeholder="Team name, e.g. Claude builds, Codex reviews" maxlength="40">
+      <button type="button" id="nSaveTeam">💾 Save as team</button></div>
+    <div id="nTeamMsg"></div>
     <div id="err"></div>
     <div class="row">
       <button value="cancel" formnovalidate>Cancel</button>
       <button class="go" id="create" value="default">Create</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="settings" class="wide">
+  <form method="dialog" class="set">
+    <h2>Settings</h2>
+    <div class="tabs"><button type="button" data-tab="agents" class="on">Agents</button>
+      <button type="button" data-tab="roles">Roles</button><button type="button" data-tab="teams">Teams</button></div>
+    <div id="tab-agents">
+      <h3>AI command-line tools</h3>
+      <table class="agents-table"><tbody id="cliRows"></tbody></table>
+      <h3>Chat APIs <span class="muted">(talk only: they see the chat messages, not your files)</span></h3>
+      <table class="agents-table"><thead><tr><th>Id</th><th>Name</th><th>Address (base URL)</th><th>Model</th>
+        <th>Key: environment variable name</th><th></th></tr></thead><tbody id="apiRows"></tbody></table>
+      <button type="button" class="small2" id="addApi">+ Add chat API</button>
+      <div class="hint">OpenAI-compatible: OpenAI <code>https://api.openai.com/v1</code>, Ollama
+        <code>http://localhost:11434/v1</code>, OpenRouter, Groq, LM Studio… The key is read from the environment
+        variable you name (e.g. <code>OPENAI_API_KEY</code>); the key itself is never saved. Leave it empty for local
+        servers. Save before you Test a new API.</div>
+    </div>
+    <div id="tab-roles" hidden>
+      <h3>Built-in roles</h3>
+      <table class="agents-table"><tbody id="builtinRoles"></tbody></table>
+      <h3>Your roles</h3>
+      <table class="agents-table"><thead><tr><th>Name</th><th>Default permission</th><th>Job (told to the agent)</th><th></th></tr></thead>
+        <tbody id="customRoles"></tbody></table>
+      <button type="button" class="small2" id="addRole">+ New role</button>
+      <div class="hint">Your roles answer like Participants (with their job and permission); the workflow order
+        (Planner → Lead → Tester → Reviewer) uses the built-in roles.</div>
+    </div>
+    <div id="tab-teams" hidden>
+      <table class="agents-table"><thead><tr><th>Name</th><th>Agents</th><th></th></tr></thead><tbody id="teamList"></tbody></table>
+      <div class="hint">Save a team from <b>New chat</b> or from a chat's <b>Team</b> dialog.</div>
+    </div>
+    <div id="setMsg" style="margin-top:8px"></div>
+    <div class="row">
+      <button value="cancel" formnovalidate>Close</button>
+      <button class="go" id="setSave" value="default">Save</button>
     </div>
   </form>
 </dialog>
@@ -252,6 +332,9 @@
     <table><tbody id="teamRows"></tbody></table>
     <div class="hint">An agent can hold several roles; it gets the highest default permission of them.
       Greyed-out permissions can't be enforced for that AI. ⚠ = raised above its role's default.</div>
+    <div class="inline"><input id="teamName" placeholder="Save this setup as a team, e.g. Claude builds, Codex reviews" maxlength="40">
+      <button type="button" id="teamSaveAs">💾 Save as team</button></div>
+    <div id="teamMsg"></div>
     <div id="teamErr" style="color:#d33;font-size:13px;margin-top:8px"></div>
     <div class="row">
       <button value="cancel" formnovalidate>Cancel</button>
@@ -333,6 +416,11 @@ async function loadList() {
   roles = d.roles || []; roles.forEach(r => { roleNames[r.id] = r.name; });
   (d.levels || []).forEach(l => { levelNames[l.id] = l.name; });
   sandbox = d.sandbox;
+  const lg = d.legacy || {};
+  $('legacy').hidden = !lg.count;
+  if (lg.count) $('legacyText').textContent =
+    `Found ${lg.count} chat${lg.count > 1 ? 's' : ''} from the old group chat (${lg.dir.replace(home, '~')}). ` +
+    'Import copies? The originals stay where they are.';
   $('warn').hidden = d.sandbox || !current || !Object.values(perm).some(p => p.limited && !p.locked);
   const list = $('list'); list.innerHTML = '';
   for (const c of d.chats) {
@@ -710,61 +798,100 @@ $('goBtn').onclick = async () => {
   const r = await api(`/api/chats/${current}/go`, {}); if (r.error) alert(r.error); refresh();
 };
 
-// ---- Team dialog: roles (several per agent) + permission override per agent
+// ---- roles (several per agent) + permission for one agent: used by New chat and the Team dialog
+function choicesFor(adapterId) {  // {level: '' if this AI can enforce it, else why not}
+  const a = adapters.find(x => x.id === adapterId) || {levels: [], notes: {}};
+  return Object.fromEntries(Object.keys(levelNames).map(lv =>
+    [lv, (a.levels || []).includes(lv) ? '' : ((a.notes || {})[lv] || "this AI can't do that")]));
+}
+function rolePermCells(choices, roleIds, level, limited) {
+  const rc = document.createElement('td'); rc.className = 'roles';
+  for (const r of roles.filter(r => r.id !== 'participant')) {
+    const l = document.createElement('label'), cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.value = r.id; cb.checked = (roleIds || []).includes(r.id);
+    l.title = r.job || ''; l.append(cb, r.name); rc.append(l);
+  }
+  const pc = document.createElement('td'); pc.style.width = '30%';
+  const sel = document.createElement('select'), note = document.createElement('div'); note.className = 'note';
+  const order = Object.keys(levelNames);
+  const checked = () => [...rc.querySelectorAll('input:checked')].map(x => x.value);
+  const fill = ch => {
+    const keep = sel.value || level || '';
+    sel.textContent = '';
+    const def = document.createElement('option'); def.value = ''; sel.append(def);
+    for (const lv of order) {
+      const o = document.createElement('option'), why = ch[lv];
+      o.value = lv; o.textContent = levelNames[lv] + (why ? ' (not possible)' : '');
+      o.disabled = !!why; o.title = why || ''; sel.append(o);
+    }
+    sel.value = keep && !ch[keep] ? keep : '';
+  };
+  const update = () => {  // the default follows the checked roles; explain raised / limited
+    const rs = checked().length ? checked() : ['participant'];
+    const d = rs.map(r => (roles.find(x => x.id === r) || {}).level || 'talk')
+                .reduce((x, y) => order.indexOf(x) > order.indexOf(y) ? x : y);
+    sel.options[0].textContent = `Default: ${levelNames[d]}`;
+    const raised = sel.value && order.indexOf(sel.value) > order.indexOf(d);
+    note.className = 'note' + (raised ? ' up' : limited ? ' lim' : '');
+    note.textContent = raised ? `⚠ raised above the default (${levelNames[d]})` :
+      limited ? `Limited right now: it ${limited}.` : '';
+  };
+  fill(choices); update();
+  rc.onchange = update; sel.onchange = update;
+  pc.append(sel, note);
+  return {rc, pc, roles: checked, level: () => sel.value || null,
+          setChoices: ch => { fill(ch); update(); }};
+}
+function confirmAuto(names_) {
+  return !names_.length || confirm(`Auto for ${names_.join(', ')}: it can run commands, use the ` +
+    'internet and edit files where you ask, without asking you. Its automatic safety reviewer ' +
+    'approves normal actions and blocks risky ones, like auto mode in the terminal. Continue?');
+}
+
+// ---- Team dialog (open chat): roles + permission per agent, save the setup as a team
 function openTeam() {
   if (!chat) return;
-  const rows = $('teamRows'); rows.textContent = ''; $('teamErr').textContent = '';
+  const rows = $('teamRows'); rows.textContent = '';
+  $('teamErr').textContent = ''; $('teamMsg').textContent = ''; $('teamName').value = '';
   for (const a of agentList) {
     const p = perm[a.id] || {}, tr = document.createElement('tr'); tr.dataset.id = a.id;
     const n = document.createElement('td'); n.style.width = '22%';
     const b = document.createElement('b'); b.style.color = colorOf(a.id); b.textContent = a.name; n.append(b);
-    const rc = document.createElement('td'); rc.className = 'roles';
-    for (const r of roles.filter(r => r.id !== 'participant')) {
-      const l = document.createElement('label'), cb = document.createElement('input');
-      cb.type = 'checkbox'; cb.value = r.id; cb.checked = (a.roles || []).includes(r.id);
-      l.title = r.job || ''; l.append(cb, r.name); rc.append(l);
-    }
-    const pc = document.createElement('td'); pc.style.width = '34%';
-    const sel = document.createElement('select');
-    const def = document.createElement('option'); def.value = ''; sel.append(def);
-    for (const lv of Object.keys(levelNames)) {
-      const o = document.createElement('option'), why = (p.choices || {})[lv];
-      o.value = lv; o.textContent = levelNames[lv] + (why ? ' (not possible)' : '');
-      o.disabled = !!why; o.title = why || ''; sel.append(o);
-    }
-    sel.value = a.level || '';
-    const note = document.createElement('div'); note.className = 'note';
-    const update = () => {  // default follows the checked roles; explain raised / limited
-      const checked = [...rc.querySelectorAll('input:checked')].map(x => x.value);
-      const order = Object.keys(levelNames), rs = checked.length ? checked : ['participant'];
-      const d = rs.map(r => (roles.find(x => x.id === r) || {}).level || 'talk')
-                  .reduce((x, y) => order.indexOf(x) > order.indexOf(y) ? x : y);
-      def.textContent = `Default: ${levelNames[d]}`;
-      const raised = sel.value && order.indexOf(sel.value) > order.indexOf(d);
-      note.className = 'note' + (raised ? ' up' : p.limited ? ' lim' : '');
-      note.textContent = raised ? `⚠ raised above the default (${levelNames[d]})` :
-        p.limited ? `Limited right now: it ${p.limited}.` : '';
-    };
-    rc.onchange = update; sel.onchange = update; update();
-    pc.append(sel, note);
-    tr.append(n, rc, pc); rows.append(tr);
+    const cells = rolePermCells(p.choices || choicesFor(a.adapter), a.roles, a.level, p.limited);
+    tr._cells = cells; tr.append(n, cells.rc, cells.pc); rows.append(tr);
   }
   $('team').showModal();
 }
+const teamRowsNow = () => [...$('teamRows').children].map(tr =>
+  ({id: tr.dataset.id, roles: tr._cells.roles(), level: tr._cells.level()}));
 $('teamBtn').onclick = openTeam;
 $('teamSave').onclick = async e => {
   e.preventDefault();
-  const agents = [...$('teamRows').children].map(tr => ({id: tr.dataset.id,
-    roles: [...tr.querySelectorAll('.roles input:checked')].map(x => x.value),
-    level: tr.querySelector('select').value || null}));
-  const newAuto = agents.filter(a => a.level === 'auto' && (agentOf(a.id).level !== 'auto'));
-  if (newAuto.length && !confirm(`Auto for ${listNames(newAuto.map(a => a.id))}: it can run commands, ` +
-      'use the internet and edit files where you ask, without asking you. Its automatic safety ' +
-      'reviewer approves normal actions and blocks risky ones, like auto mode in the terminal. Continue?')) return;
+  const agents = teamRowsNow();
+  if (!confirmAuto(agents.filter(a => a.level === 'auto' && agentOf(a.id).level !== 'auto')
+                         .map(a => names[a.id]))) return;
   const r = await api(`/api/chats/${current}/agents`, {agents});
   if (r.error) { $('teamErr').textContent = r.error; return; }
   $('team').close(); lastSig = ''; refresh();
 };
+$('teamSaveAs').onclick = () => saveTeam($('teamName').value, teamRowsNow().map(x => {
+  const a = agentOf(x.id);
+  return {adapter: a.adapter, name: a.name, model: a.model || '', roles: x.roles, level: x.level};
+}), {lock: !!chat.lock, fix_rounds: chat.fix_rounds ?? 1, rounds: chat.rounds}, $('teamMsg'));
+
+// ---- saved teams (config.json "teams")
+async function getConfig() { return api('/api/config'); }
+async function saveTeam(name, agents, opts, msgBox) {
+  name = (name || '').trim();
+  const say = (t, bad) => { msgBox.className = bad ? 'bad-msg' : 'ok-msg'; msgBox.textContent = t; };
+  if (!name) return say('Give the team a name first.', true);
+  const cfg = await getConfig(), teams = cfg.teams || [];
+  const same = teams.find(t => t.name.toLowerCase() === name.toLowerCase());
+  if (same && !confirm(`Replace the saved team "${same.name}"?`)) return;
+  const r = await api('/api/config', {teams: teams.filter(t => t !== same).concat([{name, agents, ...opts}])});
+  if (r.error) say(r.error, true); else say(`Saved team "${name}". Pick it next time under New chat.`);
+}
+
 $('compact').onclick = async () => {
   if (!confirm(`Compact: ${(agentList[0] || {}).name || 'the first agent'} summarizes this chat, then every agent continues in a fresh session ` +
                'that start from the summary, so later replies are faster and cheaper. The messages stay ' +
@@ -786,50 +913,76 @@ $('del').onclick = async () => {
   loadList();
 };
 
+// ---- New chat
 function agentRow(spec = {}) {
-  const row = document.createElement('div'); row.className = 'agentRow';
-  const sel = document.createElement('select'); sel.className = 'ad';
+  const tr = document.createElement('tr'); tr.className = 'agentRow';
+  const sel = document.createElement('select'); sel.className = 'ai';
   for (const a of adapters) {
     const o = document.createElement('option'); o.value = a.id;
     o.textContent = a.name + (a.api ? ' (API)' : a.installed ? '' : ' (not installed)'); sel.append(o);
   }
   sel.value = spec.adapter || (adapters.find(a => a.installed) || adapters[0] || {}).id;
-  const nm = document.createElement('input'); nm.className = 'nm'; nm.placeholder = 'Name (optional)'; nm.maxLength = 40;
-  const md = document.createElement('input'); md.className = 'md'; md.maxLength = 80;
+  const nm = document.createElement('input'); nm.placeholder = 'optional'; nm.maxLength = 40; nm.value = spec.name || '';
+  const md = document.createElement('input'); md.maxLength = 80; md.value = spec.model || '';
+  const cells = rolePermCells(choicesFor(sel.value), spec.roles, spec.level, '');
   const hintModel = () => { const a = adapters.find(x => x.id === sel.value) || {};
-    md.placeholder = a.needs_model ? 'Model (required)' : 'Model (optional)'; };
-  sel.addEventListener('change', hintModel); hintModel();
-  const rl = document.createElement('select'); rl.className = 'rl'; rl.title = 'Role (more roles under Team)';
-  for (const r of roles) {
-    const o = document.createElement('option'); o.value = r.id; o.title = r.job || '';
-    o.textContent = `${r.name} · ${levelNames[r.level] || r.level}`; rl.append(o);
-  }
-  rl.value = spec.role || 'participant';
-  const rm = document.createElement('button'); rm.type = 'button'; rm.textContent = '✕'; rm.title = 'Remove this agent';
-  rm.onclick = () => { if ($('nAgents').children.length > 1) row.remove(); };
-  row.append(sel, nm, md, rl, rm); $('nAgents').append(row);
+    md.placeholder = a.needs_model ? 'required' : 'default'; };
+  sel.onchange = () => { hintModel(); cells.setChoices(choicesFor(sel.value)); };
+  hintModel();
+  const rm = document.createElement('button'); rm.type = 'button'; rm.className = 'x'; rm.textContent = '✕';
+  rm.title = 'Remove this agent';
+  rm.onclick = () => { if ($('nAgents').children.length > 1) { tr.remove(); countAgents(); } };
+  const td = el => { const c = document.createElement('td'); c.append(el); return c; };
+  tr.append(td(sel), td(nm), td(md), cells.rc, cells.pc, td(rm));
+  tr._get = () => ({adapter: sel.value, name: nm.value.trim(), model: md.value.trim(),
+                    roles: cells.roles(), level: cells.level()});
+  $('nAgents').append(tr); countAgents();
+}
+const newAgents = () => [...$('nAgents').children].map(tr => tr._get());
+const countAgents = () => { $('nMany').hidden = $('nAgents').children.length <= 5; };
+let savedTeams = [];
+function useTeam(t) {
+  $('nAgents').textContent = '';
+  for (const a of t.agents) agentRow(a);
+  $('nLock').checked = !!t.lock; $('nFix').value = String(t.fix_rounds ?? 1);
+  $('nRounds').value = String(t.rounds ?? 1); $('nTeamName').value = t.name;
 }
 $('addAgent').onclick = () => {
-  const rows = $('nAgents').querySelectorAll('.ad');
-  agentRow({adapter: rows.length ? rows[rows.length - 1].value : undefined});  // "another copy" by default
+  const rows = newAgents();
+  agentRow({adapter: rows.length ? rows[rows.length - 1].adapter : undefined});  // "another copy" by default
 };
-$('newBtn').onclick = () => {
-  $('nTitle').value = ''; $('nFolder').value = home || '~'; $('err').textContent = '';
-  $('nAgents').textContent = ''; $('nLock').checked = false;
+$('nTeam').onchange = () => {
+  const t = savedTeams.find(x => x.name === $('nTeam').value);
+  if (t) useTeam(t); else { $('nAgents').textContent = ''; defaultAgents(); $('nTeamName').value = ''; }
+};
+function defaultAgents() {
   const ready = ['claude', 'codex', 'gemini'].filter(id => (adapters.find(a => a.id === id) || {}).installed);
   for (const id of ready.slice(0, 2)) agentRow({adapter: id});
   if (!$('nAgents').children.length) agentRow();
+}
+async function openNew(teamName) {
+  $('nTitle').value = ''; $('nFolder').value = home || '~'; $('err').textContent = '';
+  $('nTeamMsg').textContent = ''; $('nTeamName').value = '';
+  $('nAgents').textContent = ''; $('nLock').checked = false; $('nFix').value = '1'; $('nRounds').value = '1';
+  try { savedTeams = (await getConfig()).teams || []; } catch (e) { savedTeams = []; }
+  const sel = $('nTeam'); sel.length = 1;
+  for (const t of savedTeams) { const o = document.createElement('option'); o.value = o.textContent = t.name; sel.append(o); }
+  const t = savedTeams.find(x => x.name === teamName);
+  sel.value = t ? t.name : '';
+  if (t) useTeam(t); else defaultAgents();
   $('dlg').showModal(); $('nFolder').focus();
-};
+}
+$('newBtn').onclick = () => openNew();
+$('nSaveTeam').onclick = () => saveTeam($('nTeamName').value, newAgents(),
+  {lock: $('nLock').checked, fix_rounds: +$('nFix').value, rounds: +$('nRounds').value}, $('nTeamMsg'));
 $('create').onclick = async e => {
   e.preventDefault();
+  const agents = newAgents();
+  if (!confirmAuto(agents.filter(a => a.level === 'auto').map(a => a.name || adapterNames[a.adapter]))) return;
   let r;
   try {
-    const agents = [...$('nAgents').children].map(r => ({adapter: r.querySelector('.ad').value,
-      name: r.querySelector('.nm').value.trim(), model: r.querySelector('.md').value.trim(),
-      roles: [r.querySelector('.rl').value].filter(x => x !== 'participant')}));
-    r = await api('/api/chats', {title: $('nTitle').value, folder: $('nFolder').value,
-                                 lock: $('nLock').checked, rounds: +$('nRounds').value, agents});
+    r = await api('/api/chats', {title: $('nTitle').value, folder: $('nFolder').value, agents,
+                                 lock: $('nLock').checked, rounds: +$('nRounds').value, fix_rounds: +$('nFix').value});
   } catch (err) {
     $('err').textContent = "The chat server isn't running. Start it with `python3 -m agent_groupchat` in the project folder, then try again.";
     return;
@@ -837,6 +990,110 @@ $('create').onclick = async e => {
   if (r.error) { $('err').textContent = r.error; return; }
   $('dlg').close(); openChat(r.id);
 };
+
+// ---- Settings: Agents (CLIs + chat APIs, Test buttons), Roles (custom), Teams
+let setCfg = {apis: [], roles: [], teams: []};
+const cell = (...els) => { const c = document.createElement('td'); c.append(...els); return c; };
+const btn2 = (label, fn, title) => { const b = document.createElement('button'); b.type = 'button';
+  b.className = 'x'; b.textContent = label; if (title) b.title = title; b.onclick = fn; return b; };
+const inp = (value, ph, max) => { const i = document.createElement('input'); i.value = value || '';
+  i.placeholder = ph || ''; if (max) i.maxLength = max; return i; };
+async function testAdapter(id, out) {
+  out.className = 'muted'; out.textContent = 'testing…';
+  try {
+    const r = await api(`/api/adapters/${encodeURIComponent(id)}/test`);
+    out.className = r.ok ? 'ok-msg' : 'bad-msg'; out.textContent = (r.ok ? '✅ ' : '❌ ') + r.message;
+  } catch (e) { out.className = 'bad-msg'; out.textContent = '❌ the server is not reachable'; }
+}
+function apiRow(a = {}) {
+  const tr = document.createElement('tr');
+  const f = {id: inp(a.id, 'ollama', 31), name: inp(a.name, 'Llama', 30), base_url: inp(a.base_url, 'http://localhost:11434/v1', 300),
+             model: inp(a.model, 'llama3.1', 100), key_env: inp(a.key_env, 'OPENAI_API_KEY (or empty)', 80)};
+  const out = document.createElement('div'); out.className = 'muted';
+  const tc = cell(btn2('Test', () => testAdapter(f.id.value.trim(), out), 'Is it reachable? (save first)'),
+                  btn2('✕', () => tr.remove(), 'Remove'));
+  tr.append(cell(f.id), cell(f.name), cell(f.base_url), cell(f.model), cell(f.key_env, out), tc);
+  tr._get = () => Object.fromEntries(Object.entries(f).map(([k, v]) => [k, v.value.trim()]));
+  $('apiRows').append(tr);
+}
+function customRoleRow(r = {}) {
+  const tr = document.createElement('tr');
+  const name = inp(r.name, 'e.g. Translator', 40);
+  const lv = document.createElement('select');
+  for (const l of Object.keys(levelNames)) { const o = document.createElement('option'); o.value = l; o.textContent = levelNames[l]; lv.append(o); }
+  lv.value = r.level || 'read';
+  const job = document.createElement('textarea'); job.value = r.job || ''; job.maxLength = 2000;
+  job.placeholder = 'What this agent should do, e.g. "Translate all UI text to Turkish."';
+  tr.append(cell(name), cell(lv), cell(job), cell(btn2('✕', () => tr.remove(), 'Remove')));
+  tr._get = () => ({name: name.value.trim(), level: lv.value, job: job.value.trim()});
+  $('customRoles').append(tr);
+}
+function teamListRow(t) {
+  const tr = document.createElement('tr');
+  const name = inp(t.name, '', 40);
+  const who = document.createElement('span'); who.className = 'muted';
+  who.textContent = t.agents.map(a => `${a.name || adapterNames[a.adapter] || a.adapter}` +
+    ` (${(a.roles || []).map(r => roleNames[r] || r).join(' + ') || 'Participant'})`).join(' · ');
+  tr.append(cell(name), cell(who), cell(btn2('Use', () => { $('settings').close(); openNew(t.name); },
+                                             'Start a new chat with this team'),
+                                        btn2('✕', () => tr.remove(), 'Delete this team')));
+  tr._get = () => ({...t, name: name.value.trim()});
+  $('teamList').append(tr);
+}
+function showTab(tab) {
+  for (const b of document.querySelectorAll('#settings .tabs button')) b.classList.toggle('on', b.dataset.tab === tab);
+  for (const t of ['agents', 'roles', 'teams']) $('tab-' + t).hidden = t !== tab;
+}
+for (const b of document.querySelectorAll('#settings .tabs button')) b.onclick = () => showTab(b.dataset.tab);
+async function openSettings() {
+  $('setMsg').textContent = '';
+  setCfg = await getConfig();
+  const cli = $('cliRows'); cli.textContent = '';
+  for (const a of adapters.filter(a => !a.api)) {  // finds the installed CLIs right away
+    const tr = document.createElement('tr'), out = document.createElement('span');
+    const nm = document.createElement('b'); const dot = document.createElement('span');
+    dot.className = 'dot'; dot.style.background = a.color; nm.append(dot, a.name);
+    const lv = document.createElement('span'); lv.className = 'muted';
+    lv.textContent = 'can do: ' + a.levels.map(l => levelNames[l]).join(', ');
+    tr.append(cell(nm), cell(lv), cell(out), cell(btn2('Test', () => testAdapter(a.id, out))));
+    cli.append(tr); testAdapter(a.id, out);
+  }
+  $('apiRows').textContent = ''; (setCfg.apis || []).forEach(a => apiRow(a));
+  const br = $('builtinRoles'); br.textContent = '';
+  for (const r of roles.filter(r => r.builtin)) {
+    const tr = document.createElement('tr'), job = document.createElement('span'); job.className = 'muted';
+    job.textContent = r.job || 'No special job: answers like before roles.';
+    const b = document.createElement('b'); b.textContent = r.name;
+    tr.append(cell(b), cell(levelNames[r.level]), cell(job),
+              cell(btn2('Copy', () => { customRoleRow({name: r.name + ' copy', level: r.level, job: r.job}); },
+                        'Make your own role from this one')));
+    br.append(tr);
+  }
+  $('customRoles').textContent = ''; (setCfg.roles || []).forEach(r => customRoleRow(r));
+  $('teamList').textContent = ''; (setCfg.teams || []).forEach(t => teamListRow(t));
+  showTab('agents'); $('settings').showModal();
+}
+$('setBtn').onclick = openSettings;
+$('addApi').onclick = () => apiRow();
+$('addRole').onclick = () => customRoleRow();
+$('setSave').onclick = async e => {
+  e.preventDefault();
+  const body = {apis: [...$('apiRows').children].map(tr => tr._get()),
+                roles: [...$('customRoles').children].map(tr => tr._get()),
+                teams: [...$('teamList').children].map(tr => tr._get())};
+  const r = await api('/api/config', body), m = $('setMsg');
+  if (r.error) { m.className = 'bad-msg'; m.textContent = r.error; return; }
+  m.className = 'ok-msg'; m.textContent = 'Saved.';
+  await loadList();  // new APIs and roles show up right away
+};
+
+// ---- old chats from ~/groupchat
+$('legacyImport').onclick = async () => {
+  const r = await api('/api/legacy', {action: 'import'});
+  $('legacy').hidden = true; await loadList();
+  if (r.imported) alert(`Imported ${r.imported} chat${r.imported > 1 ? 's' : ''}. They're in the list on the left.`);
+};
+$('legacyNo').onclick = async () => { await api('/api/legacy', {action: 'dismiss'}); $('legacy').hidden = true; };
 
 (async () => {
   const list = await loadList();
