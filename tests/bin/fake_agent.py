@@ -6,7 +6,8 @@ It prints the same kind of JSON event stream as the real CLI, so the app's real
 adapter code parses it. Controlled by environment variables:
   FAKE_LOG    append one JSON line per run: {"style", "argv", "cwd"}
   FAKE_RULES  JSON list of {"style"?, "if"?, "reply"?, "write"?: {path: text}, "exit"?: code};
-              the first rule whose style matches and whose "if" text is in the prompt wins.
+              the first rule whose style matches and whose "if" text is in its arguments
+              (prompt or system prompt) wins.
 """
 import json
 import os
@@ -21,7 +22,7 @@ if os.environ.get("FAKE_LOG"):
 
 rule = {}
 for r in json.loads(os.environ.get("FAKE_RULES") or "[]"):
-    if r.get("style", style) == style and r.get("if", "") in prompt:
+    if r.get("style", style) == style and r.get("if", "") in "\n".join(argv):
         rule = r
         break
 reply = rule.get("reply", f"fake {style} reply")

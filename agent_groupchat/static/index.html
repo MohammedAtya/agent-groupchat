@@ -38,6 +38,8 @@
   header h1 { font-size:16px; margin:0; flex:1; min-width:120px; cursor:text;
               white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   header .folder { font-size:12px; color:var(--muted); font-family:ui-monospace, monospace; }
+  header .agents { font-size:12px; color:var(--muted); }
+  header .agents b { font-weight:600; } header .agents .model { font-family:ui-monospace, monospace; font-size:11px; }
   .ctl { font-size:13px; color:var(--muted); display:flex; align-items:center; gap:6px; }
   .ctl select, .small { background:var(--bg); border:1px solid var(--border); border-radius:6px;
                         padding:3px 6px; font-size:13px; cursor:pointer; }
@@ -48,8 +50,7 @@
   .msg .who { font-size:12px; font-weight:600; margin-bottom:2px; }
   .msg.user { align-self:flex-end; background:var(--user); color:#fff; border-color:var(--user); }
   .msg.user .who { color:#dbe6ff; }
-  .msg.claude { border-left:4px solid var(--claude); } .msg.claude .who { color:var(--claude); }
-  .msg.codex  { border-left:4px solid var(--codex); }  .msg.codex  .who { color:var(--codex); }
+  .msg.bot { border-left:4px solid var(--c, #888); } .msg.bot .who { color:var(--c, #888); }
   #typing { font-size:13px; color:var(--muted); padding:0 16px 6px; min-height:20px; }
   #typing .act { max-width:860px; margin:0 auto 4px; padding:6px 10px; border:1px solid var(--border);
                  border-radius:10px; background:var(--panel); display:flex; gap:10px; align-items:flex-start; }
@@ -101,8 +102,7 @@
   .diff .d { color:#cf222e; background:rgba(248,81,73,.12); display:block; }
   .diff .h { color:var(--muted); display:block; }
   @media (prefers-color-scheme: dark) { .diff .a { color:#56d364; } .diff .d { color:#ff7b72; } }
-  .msg.summary { align-self:stretch; max-width:100%; border:1px dashed var(--claude); }
-  .msg.summary .who { color:var(--claude); }
+  .msg.summary { align-self:stretch; max-width:100%; border:1px dashed var(--c, #888); }
   .md .path { font-family:ui-monospace, monospace; font-size:13px; border-bottom:1px dotted var(--muted); cursor:help; }
   form#f { display:flex; gap:8px; padding:12px 16px; border-top:1px solid var(--border);
            background:var(--panel); }
@@ -128,13 +128,18 @@
   .resume { font-size:12px; color:var(--muted); text-align:center; font-family:ui-monospace, monospace; }
   /* dialog */
   dialog { border:1px solid var(--border); border-radius:12px; background:var(--panel);
-           color:var(--text); width:min(460px, calc(100vw - 32px)); padding:20px; }
+           color:var(--text); width:min(560px, calc(100vw - 32px)); padding:20px; }
   dialog::backdrop { background:rgba(0,0,0,.4); }
   dialog h2 { margin:0 0 14px; font-size:17px; }
   dialog label { display:block; font-size:13px; color:var(--muted); margin:12px 0 4px; }
   dialog input, dialog select { width:100%; padding:8px 10px; border-radius:8px;
                                 border:1px solid var(--border); background:var(--bg); }
   dialog .hint { font-size:12px; color:var(--muted); margin-top:4px; }
+  .agentRow { display:flex; gap:6px; margin-bottom:6px; }
+  dialog .agentRow select { width:auto; flex:0 0 130px; } dialog .agentRow input { width:auto; flex:1; min-width:0; }
+  .agentRow button, #addAgent { padding:0 10px; border-radius:8px; border:1px solid var(--border);
+                                background:var(--bg); cursor:pointer; }
+  #addAgent { padding:5px 10px; font-size:13px; }
   dialog .row { display:flex; gap:8px; justify-content:flex-end; margin-top:18px; }
   dialog .row button { padding:8px 14px; border-radius:8px; border:1px solid var(--border);
                        background:var(--bg); cursor:pointer; }
@@ -153,6 +158,7 @@
     <div style="flex:1;min-width:0">
       <h1 id="title" title="Click to rename"></h1>
       <div class="folder" id="folder"></div>
+      <div class="agents" id="agents"></div>
     </div>
     <span class="ctl">Mode
       <select id="mode"><option value="talk">Talk only</option><option value="work">Can work</option><option value="auto">Auto</option></select>
@@ -161,9 +167,8 @@
       <select id="rounds"><option value="0">Off</option><option value="1">1 round</option>
         <option value="2">2 rounds</option><option value="3">3 rounds</option></select>
     </span>
-    <span class="ctl" title="Lead + Review: the lead does the work, then the other AI reviews it (read-only). @mention to ask either one directly.">Lead
-      <select id="lead"><option value="">Off</option><option value="claude">Claude works, Codex reviews</option>
-        <option value="codex">Codex works, Claude reviews</option></select>
+    <span class="ctl" title="Lead + Review: the lead does the work, then the next agent reviews it (read-only). @mention to ask any agent directly.">Lead
+      <select id="lead"><option value="">Off</option></select>
     </span>
     <button class="small" id="compact" title="Summarize this chat and continue in fresh sessions from the summary (cheaper replies)">Compact</button>
     <button class="small" id="export" title="Download this chat as Markdown">Export</button>
@@ -173,7 +178,7 @@
     ⚠ The chat server isn't running. Start it with <code>python3 -m agent_groupchat</code> in the project folder, and this page reconnects by itself.
   </div>
   <div id="warn" hidden style="background:#fdf3e1;color:#7a4b00;padding:8px 16px;font-size:13px;border-bottom:1px solid #f0d9a8">
-    ⚠ Sandbox unavailable: Codex stays read-only, and in "Can work" Claude can edit files but can't run commands. (Auto mode still lets Claude do everything.)
+    ⚠ Sandbox unavailable: agents that need it are limited (Codex stays read-only; in "Can work" Claude can edit files but can't run commands, while Auto still lets Claude do everything).
     To fix it, run the one-time sandbox setup from the README.
   </div>
   <div id="log"><div class="inner" id="inner"><div class="empty">Pick a chat on the left, or start a new one.</div></div></div>
@@ -182,7 +187,7 @@
   <div id="menu" hidden></div>
   <div id="to" style="font-size:12px;color:var(--muted);padding:0 16px 4px"></div>
   <form id="f" hidden>
-    <textarea id="t" placeholder="Message the group… (@claude / @codex to ask one, / for skills)"></textarea>
+    <textarea id="t" placeholder="Message the group… (@name to ask one agent, / for skills)"></textarea>
     <button>Send</button>
   </form>
   </div>
@@ -195,14 +200,19 @@
     <input id="nTitle" placeholder="Named after your first message if empty">
     <label for="nFolder">Project folder</label>
     <input id="nFolder">
-    <div class="hint">Claude and Codex work here and load this folder's CLAUDE.md / AGENTS.md and project skills.</div>
+    <div class="hint">The agents work here and load this folder's CLAUDE.md / AGENTS.md and project skills.</div>
+    <label>Agents</label>
+    <div id="nAgents"></div>
+    <button type="button" id="addAgent">+ Add agent</button>
+    <div class="hint">Add several copies of the same AI if you like: each one is its own session. An empty name
+      becomes "Claude", or "Claude 1", "Claude 2"… for copies. An empty model uses the CLI's default.</div>
     <label for="nMode">Mode</label>
     <select id="nMode">
       <option value="talk">Talk only: read files and use skills, no changes</option>
       <option value="work">Can work: edit files and run commands, sandboxed to the folder</option>
-      <option value="auto">Auto: both work like auto mode in the terminal, with safety review</option>
+      <option value="auto">Auto: every agent works like auto mode in the terminal, with safety review</option>
     </select>
-    <label for="nRounds">Let Claude and Codex reply to each other</label>
+    <label for="nRounds">Let the agents reply to each other</label>
     <select id="nRounds"><option value="0">Off</option><option value="1" selected>1 round</option>
       <option value="2">2 rounds</option><option value="3">3 rounds</option></select>
     <div id="err"></div>
@@ -215,7 +225,11 @@
 
 <script>
 const $ = id => document.getElementById(id);
-const names = {user:'You', claude:'Claude', codex:'Codex'};
+// The open chat's agents ([{id, adapter, name, model}]) and lookups built from them.
+let names = {user:'You'}, colors = {}, aliasMap = {}, agentList = [];
+let adapters = [], adapterNames = {}, adapterColors = {};  // every AI the server knows
+const colorOf = id => colors[id] || '#888';
+const agentOf = id => agentList.find(a => a.id === id) || {};
 let current = null, lastSig = '', home = '', lead = '', lastScrolled = false, stopping = false;
 
 const TOKEN = '__GC_TOKEN__';  // filled in by server.py; changes on every server launch
@@ -228,6 +242,29 @@ async function api(path, body) {
     sessionStorage.setItem('gc-reloaded', '1'); location.reload();
   } else if (r.ok) sessionStorage.removeItem('gc-reloaded');
   return r.json();
+}
+
+function listNames(ids) {
+  const n = ids.map(b => names[b] || b);
+  return n.length > 2 ? n.slice(0, -1).join(', ') + ' and ' + n[n.length - 1] : n.join(' and ');
+}
+function showAgents() {
+  const box = $('agents'); box.textContent = '';
+  agentList.forEach((a, i) => {
+    if (i) box.append(' · ');
+    const b = document.createElement('b'); b.style.color = colorOf(a.id); b.textContent = a.name;
+    b.title = `@${a.id}` + (a.model ? ` · model ${a.model}` : ''); box.append(b);
+    if (a.model) { const m = document.createElement('span'); m.className = 'model'; m.textContent = ` (${a.model})`; box.append(m); }
+  });
+}
+function fillLead() {  // "Claude 1 works, Claude 2 reviews" for each agent that has someone after it
+  const opts = [['', 'Off']].concat(agentList.length > 1 ? agentList.map((a, i) =>
+    [a.id, `${a.name} works, ${agentList[(i + 1) % agentList.length].name} reviews`]) : []);
+  const key = JSON.stringify(opts), sel = $('lead');
+  if (sel.dataset.key === key) return;
+  sel.textContent = '';
+  for (const [v, t] of opts) { const o = document.createElement('option'); o.value = v; o.textContent = t; sel.append(o); }
+  sel.dataset.key = key;
 }
 
 function ago(ts) {
@@ -243,6 +280,8 @@ async function loadList() {
   try { d = await api('/api/chats'); $('down').hidden = true; }
   catch (e) { $('down').hidden = false; return []; }
   home = d.home;
+  adapters = d.adapters || [];
+  adapters.forEach(a => { adapterNames[a.id] = a.name; adapterColors[a.id] = a.color; });
   $('warn').hidden = d.sandbox || !current || $('mode').value === 'talk';
   const list = $('list'); list.innerHTML = '';
   for (const c of d.chats) {
@@ -276,24 +315,30 @@ async function refresh() {
   if (c.error) { current = null; return; }
   $('title').textContent = c.title;
   $('folder').textContent = c.folder;
+  agentList = c.agents || []; colors = c.colors || {}; aliasMap = c.aliases || {};
+  names = {user:'You'}; agentList.forEach(a => { names[a.id] = a.name; });
+  showAgents(); fillLead();
   $('mode').value = c.mode; $('rounds').value = String(c.rounds); $('lead').value = c.lead || '';
   lead = c.lead || '';
-  const sig = c.messages.length + '|' + (c.sessions.claude||'') + (c.sessions.codex||'') + '|' +
+  const sig = c.messages.length + '|' + JSON.stringify(c.sessions) + '|' +
     JSON.stringify(c.messages.map(m => [m.status, m.retried]));
   if (sig !== lastSig) {
     lastSig = sig;
     const log = $('log'), stick = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
     const inner = $('inner'); inner.innerHTML = '';
-    if (!c.messages.length)
-      inner.innerHTML = '<div class="empty">Say hi to Claude and Codex 👋</div>';
+    if (!c.messages.length) {
+      const e = document.createElement('div'); e.className = 'empty';
+      e.textContent = `Say hi to ${listNames(agentList.map(a => a.id))} 👋`; inner.append(e);
+    }
     c.messages.forEach((m, idx) => {
       if (m.hidden || m.who === 'system') return;
       const meta = m.meta || {}, summary = meta.role === 'summary';
       const failed = m.who !== 'user' && /^\((error|stopped|timed out)/.test(m.text);
       const d = document.createElement('div');
-      d.className = 'msg ' + m.who + (summary ? ' summary' : '') + (failed ? ' failed' : '') + (m.retried ? ' retried' : '');
+      d.className = 'msg ' + (m.who === 'user' ? 'user' : 'bot') + (summary ? ' summary' : '') + (failed ? ' failed' : '') + (m.retried ? ' retried' : '');
+      if (m.who !== 'user') d.style.setProperty('--c', colorOf(m.who));
       const w = document.createElement('div'); w.className = 'who';
-      w.textContent = summary ? '📋 Chat summary (by Claude): fresh sessions continue from here'
+      w.textContent = summary ? `📋 Chat summary (by ${names[m.who] || m.who}): fresh sessions continue from here`
         : (names[m.who] || m.who) + (meta.role === 'review' ? ' · review' : '') + (m.retried ? ' · retried' : '');
       const b = document.createElement('div');
       if (m.who === 'user') b.textContent = m.text;          // your messages stay plain text
@@ -306,11 +351,11 @@ async function refresh() {
       if (openDiffs.has(idx)) showDiff(d, idx);
       inner.append(d);
     });
-    if (c.sessions.claude || c.sessions.codex) {
+    const hints = Object.entries(c.resume || {});
+    if (hints.length) {
       const r = document.createElement('div'); r.className = 'resume';
       r.textContent = 'Continue in a terminal (cd ' + c.folder.replace(home, '~') + '):  ' +
-        [c.sessions.claude && 'claude -r ' + c.sessions.claude,
-         c.sessions.codex && 'codex resume ' + c.sessions.codex].filter(Boolean).join('   ·   ');
+        hints.map(([b, h]) => (agentList.length > 2 ? names[b] + ': ' : '') + h).join('   ·   ');
       inner.append(r);
     }
     if (stick || !lastScrolled) log.scrollTop = log.scrollHeight;  // don't yank you away from older messages
@@ -410,7 +455,7 @@ function statusLine(status) {
   for (const [b, st] of Object.entries(status)) {
     const sp = document.createElement('span');
     if (['error', 'timed out'].includes(st)) sp.className = 'bad';
-    sp.textContent = `${names[b]} ${ST[st] || st}`; x.append(sp);
+    sp.textContent = `${names[b] || b} ${ST[st] || st}`; x.append(sp);
   }
   return x;
 }
@@ -421,10 +466,10 @@ function actions(m, idx, failed) {
     const bt = document.createElement('button'); bt.type = 'button'; bt.textContent = label; bt.title = title;
     if (cls) bt.className = cls; bt.onclick = fn; x.append(bt);
   };
-  btn('↩ Reply', `Write to ${names[m.who]} only`, () => {
-    const t = $('t'); t.value = `@${m.who} ` + t.value.replace(/^@(claude|codex)\s*/i, ''); t.focus(); updateTo(); });
+  btn('↩ Reply', `Write to ${names[m.who] || m.who} only`, () => {
+    const t = $('t'); t.value = `@${m.who} ` + t.value.replace(/^@[\w-]+\s*/, ''); t.focus(); updateTo(); });
   if (failed && !m.retried)
-    btn('↻ Retry', `Ask ${names[m.who]} again`, async () => {
+    btn('↻ Retry', `Ask ${names[m.who] || m.who} again`, async () => {
       const r = await api(`/api/chats/${current}/retry`, {index: idx});
       if (r.error) alert(r.error); else refresh(); }, 'retry');
   const df = (m.meta || {}).diff;
@@ -461,12 +506,12 @@ function showActivity(act) {
   box.innerHTML = '';
   bots.forEach((b, i) => {
     const a = act[b], row = document.createElement('div'); row.className = 'act';
-    row.style.borderLeft = `4px solid var(--${b})`;
+    row.style.borderLeft = `4px solid ${colorOf(b)}`;
     const body = document.createElement('div'); body.className = 'body';
     const now = document.createElement('div'); now.className = 'now';
     const steps = a.steps || [];
-    now.innerHTML = `<b style="color:var(--${b})">${names[b]}</b> `;
-    now.append(`${a.role ? a.role + ' · ' : ''}${dur(Date.now()/1000 - a.since)} · ${steps.length ? steps[steps.length-1] : 'thinking…'}`);
+    const who = document.createElement('b'); who.style.color = colorOf(b); who.textContent = names[b] || b;
+    now.append(who, ' ',`${a.role ? a.role + ' · ' : ''}${dur(Date.now()/1000 - a.since)} · ${steps.length ? steps[steps.length-1] : 'thinking…'}`);
     body.append(now);
     for (const s of steps.slice(-3, -1).reverse()) {
       const p = document.createElement('div'); p.className = 'prev'; p.textContent = s; body.append(p);
@@ -495,14 +540,19 @@ $('f').onsubmit = async e => {
   await api(`/api/chats/${current}/send`, {text});
   refresh(); loadList();
 };
-function mentioned(text) {
-  const found = new Set([...text.matchAll(/(?<![\w@])@(claude|codex)\b/gi)].map(m => m[1].toLowerCase()));
-  return ['claude', 'codex'].filter(b => found.has(b));
+function mentioned(text) {  // same rules as the server: @claude-2, @claude2, @claude (every Claude)
+  const keys = Object.keys(aliasMap).sort((a, b) => b.length - a.length)
+    .map(k => k.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&'));
+  if (!keys.length) return [];
+  const found = new Set();
+  for (const m of text.matchAll(new RegExp(`(?<![\\w@])@(${keys.join('|')})(?![\\w-])`, 'gi')))
+    for (const b of aliasMap[m[1].toLowerCase()] || []) found.add(b);
+  return agentList.map(a => a.id).filter(b => found.has(b));
 }
 // ---- skills + slash menu
 let skills = [], skillsFor = null, menuItems = [], menuSel = 0;
-const SLASH_RE = /^\s*(?:@(?:claude|codex)\b[\s,:]*)*\/([\w:.-]*)$/i;   // text before the caret
-const SKILL_RE = /^\s*(?:@(?:claude|codex)\b[\s,:]*)*\/([\w:.-]+)/i;    // whole message
+const SLASH_RE = /^\s*(?:@[\w-]+[\s,:]*)*\/([\w:.-]*)$/i;   // text before the caret
+const SKILL_RE = /^\s*(?:@[\w-]+[\s,:]*)*\/([\w:.-]+)/i;    // whole message
 
 async function loadSkills() {
   if (!current) return;
@@ -513,18 +563,21 @@ function skillOf(text) {
   const m = text.match(SKILL_RE);
   return m && skills.find(s => s.name.toLowerCase() === m[1].toLowerCase());
 }
-const tag = b => `<b style="background:var(--${b})">${names[b]}</b>`;
+const tag = ad => `<b style="background:${adapterColors[ad] || '#888'}">${esc(adapterNames[ad] || ad)}</b>`;
 
 function updateTo() {
-  const text = $('t').value, m = mentioned(text), sk = skillOf(text);
-  const who = m.length ? m : sk ? sk.bots : lead ? [lead] : ['claude', 'codex'];
-  const list = who.map(b => `<b style="color:var(--${b})">${names[b]}</b>`).join(' and ');
-  const rev = lead === 'claude' ? 'codex' : 'claude';
+  const text = $('t').value, m = mentioned(text), sk = skillOf(text), ids = agentList.map(a => a.id);
+  const has = b => sk.adapters.includes(agentOf(b).adapter);
+  const who = m.length ? m : sk ? ids.filter(has) : lead ? [lead] : ids;
+  const nm = b => `<b style="color:${colorOf(b)}">${esc(names[b] || b)}</b>`;
+  const list = who.length > 2 ? who.slice(0, -1).map(nm).join(', ') + ' and ' + nm(who[who.length - 1])
+                              : who.map(nm).join(' and ');
+  const rev = lead ? ids[(ids.indexOf(lead) + 1) % ids.length] : null;
   $('to').innerHTML = !text.trim() ? '' :
-    (sk ? `→ runs <b>/${sk.name}</b> on ${list}` :
-     lead && !m.length ? `→ ${list} works on it, then <b style="color:var(--${rev})">${names[rev]}</b> reviews (read-only)` :
-     `→ ${who.length === 1 ? 'only ' : ''}${list} will reply`) +
-    (sk && m.some(b => !sk.bots.includes(b)) ? ` <span style="color:var(--warn)">(${m.filter(b => !sk.bots.includes(b)).map(b => names[b]).join(', ')} doesn't have this skill)</span>` : '');
+    (sk ? `→ runs <b>/${esc(sk.name)}</b> on ${list}` :
+     lead && !m.length ? `→ ${list} works on it, then ${nm(rev)} reviews (read-only)` :
+     `→ ${who.length === 1 && ids.length > 1 ? 'only ' : ''}${list} will reply`) +
+    (sk && m.some(b => !has(b)) ? ` <span style="color:var(--warn)">(${esc(listNames(m.filter(b => !has(b))))} doesn't have this skill)</span>` : '');
 }
 
 function updateMenu() {
@@ -544,7 +597,7 @@ function updateMenu() {
     const nm = document.createElement('span'); nm.className = 'nm'; nm.textContent = '/' + s.name;
     const hi = document.createElement('span'); hi.className = 'hint'; hi.textContent = s.hint;
     const ds = document.createElement('span'); ds.className = 'ds'; ds.textContent = s.description; ds.title = s.description;
-    const w = document.createElement('span'); w.className = 'who2'; w.innerHTML = s.bots.map(tag).join('');
+    const w = document.createElement('span'); w.className = 'who2'; w.innerHTML = (s.adapters || []).map(tag).join('');
     o.append(nm, hi, ds, w);
     o.onmousedown = e => { e.preventDefault(); pick(i); };
     menu.append(o);
@@ -578,8 +631,8 @@ $('t').addEventListener('keydown', e => {
 });
 $('mode').onchange = async () => {
   const asks = {
-    work: 'Let Claude and Codex edit files and run commands in this folder without asking?',
-    auto: 'Auto mode: Claude and Codex can run commands, use the internet and edit files where ' +
+    work: 'Let the agents edit files and run commands in this folder without asking?',
+    auto: 'Auto mode: the agents can run commands, use the internet and edit files where ' +
           'you ask, without asking you. Their automatic safety reviewers approve normal actions ' +
           'and block risky ones, like auto mode in the terminal. Continue?'};
   if (asks[$('mode').value] && !confirm(asks[$('mode').value])) {
@@ -591,7 +644,7 @@ $('lead').onchange = async () => {
   await api(`/api/chats/${current}/settings`, {lead: $('lead').value}); lead = $('lead').value; updateTo();
 };
 $('compact').onclick = async () => {
-  if (!confirm('Compact: Claude summarizes this chat, then Claude and Codex continue in fresh sessions ' +
+  if (!confirm(`Compact: ${(agentList[0] || {}).name || 'the first agent'} summarizes this chat, then every agent continues in a fresh session ` +
                'that start from the summary, so later replies are faster and cheaper. The messages stay ' +
                'on the page and the old sessions stay resumable from the terminal. Continue?')) return;
   const r = await api(`/api/chats/${current}/compact`, {});
@@ -604,23 +657,43 @@ $('title').onclick = async () => {
   if (t && t.trim()) { await api(`/api/chats/${current}/settings`, {title: t}); refresh(); loadList(); }
 };
 $('del').onclick = async () => {
-  if (!confirm('Delete this chat from the list? (The Claude/Codex sessions stay in their own history.)')) return;
+  if (!confirm("Delete this chat from the list? (The agents' own sessions stay in their history.)")) return;
   await api(`/api/chats/${current}/delete`, {});
   current = null; $('hdr').hidden = true; $('f').hidden = true;
   $('inner').innerHTML = '<div class="empty">Chat deleted.</div>';
   loadList();
 };
 
+function agentRow(spec = {}) {
+  const row = document.createElement('div'); row.className = 'agentRow';
+  const sel = document.createElement('select'); sel.className = 'ad';
+  for (const a of adapters) { const o = document.createElement('option'); o.value = a.id; o.textContent = a.name; sel.append(o); }
+  sel.value = spec.adapter || (adapters[0] || {}).id;
+  const nm = document.createElement('input'); nm.className = 'nm'; nm.placeholder = 'Name (optional)'; nm.maxLength = 40;
+  const md = document.createElement('input'); md.className = 'md'; md.placeholder = 'Model (optional)'; md.maxLength = 80;
+  const rm = document.createElement('button'); rm.type = 'button'; rm.textContent = '✕'; rm.title = 'Remove this agent';
+  rm.onclick = () => { if ($('nAgents').children.length > 1) row.remove(); };
+  row.append(sel, nm, md, rm); $('nAgents').append(row);
+}
+$('addAgent').onclick = () => {
+  const rows = $('nAgents').querySelectorAll('.ad');
+  agentRow({adapter: rows.length ? rows[rows.length - 1].value : undefined});  // "another copy" by default
+};
 $('newBtn').onclick = () => {
   $('nTitle').value = ''; $('nFolder').value = home || '~'; $('err').textContent = '';
+  $('nAgents').textContent = '';
+  for (const id of ['claude', 'codex'].filter(id => adapterNames[id])) agentRow({adapter: id});
+  if (!$('nAgents').children.length) agentRow();
   $('dlg').showModal(); $('nFolder').focus();
 };
 $('create').onclick = async e => {
   e.preventDefault();
   let r;
   try {
+    const agents = [...$('nAgents').children].map(r => ({adapter: r.querySelector('.ad').value,
+      name: r.querySelector('.nm').value.trim(), model: r.querySelector('.md').value.trim()}));
     r = await api('/api/chats', {title: $('nTitle').value, folder: $('nFolder').value,
-                                 mode: $('nMode').value, rounds: +$('nRounds').value});
+                                 mode: $('nMode').value, rounds: +$('nRounds').value, agents});
   } catch (err) {
     $('err').textContent = "The chat server isn't running. Start it with `python3 -m agent_groupchat` in the project folder, then try again.";
     return;

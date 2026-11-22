@@ -4,7 +4,7 @@ import re
 import tempfile
 
 from ..skills import HOME, ancestors, scan_skill_dirs
-from .base import Adapter, add_file, error_text, first_line, rel
+from .base import TALK_TEXT, Adapter, add_file, error_text, first_line, rel
 
 
 def config(ability):
@@ -22,7 +22,21 @@ def config(ability):
 class CodexAdapter(Adapter):
     id = "codex"
     name = "Codex"
-    description = "Codex (OpenAI's coding agent)"
+    kind = "OpenAI's coding agent"
+    color = "#10a37f"
+    mode_texts = {
+        "talk": TALK_TEXT,
+        "work": "WORK mode: you may edit files and run commands inside the project folder "
+                "(workspace-write sandbox).",
+        "edit-only": "LIMITED mode (sandbox unavailable): you are read-only, so leave the "
+                     "hands-on work to the AIs that can edit.",
+        "auto": "AUTO mode: you may run commands and edit files where the user asks. You start "
+                "sandboxed to the project folder with no internet; if blocked, request escalated "
+                "permissions and the automatic reviewer will approve or deny. Risky actions are "
+                "blocked.",
+        "auto-limited": "AUTO mode, but your sandbox is unavailable, so you are read-only: leave "
+                        "the hands-on work to the AIs that can edit.",
+    }
     intro_note = (" Note: in your workspace-write sandbox, empty read-only .git/.codex/.agents/.aws "
                   "folders can appear in the project; they are sandbox mount points, not real "
                   "files, so don't report them as project contents.")
@@ -32,6 +46,8 @@ class CodexAdapter(Adapter):
     def run(self, ctx, prompt, ability):
         sid = ctx.session
         conf = config(ability)
+        if ctx.model:
+            conf += ["-c", f'model="{ctx.model}"']
         out = {"files": [], "usage": None}
 
         def on_event(ev):
@@ -81,6 +97,9 @@ class CodexAdapter(Adapter):
         if why:
             return f"({why})", meta
         return (text or error_text(None, err, code)), meta
+
+    def resume_hint(self, session):
+        return f"codex resume {session}"
 
     def skill_files(self, folder):
         roots = [os.path.join(HOME, ".codex", "skills"),

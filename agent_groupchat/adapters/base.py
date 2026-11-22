@@ -21,13 +21,20 @@ class RunContext:
     # stream(cmd, on_event) runs cmd in `folder`, calls on_event for every JSON line of its
     # stdout and returns (exit code, stderr tail, None | "stopped" | "timed out").
     # It owns the process, so the user's Stop button and the timeout work for every agent.
+    model: Optional[str] = None      # model for this agent, or None for the CLI's default
+
+
+TALK_TEXT = "TALK mode: you may read files and use skills, but do not modify anything."
 
 
 class Adapter:
-    id = ""            # key used in chats and @mentions, e.g. "claude"
-    name = ""          # display name, e.g. "Claude"
-    description = ""   # how the OTHER agents are told about this one
+    id = ""            # e.g. "claude"; also `@claude` reaches every copy of this AI in a chat
+    name = ""          # default display name, e.g. "Claude"
+    kind = ""          # what it is, told to the other agents, e.g. "Anthropic's Claude Code"
+    color = "#888888"  # accent color on the page
     intro_note = ""    # extra agent-specific sentence appended to this agent's intro
+    # What this agent may do in each chat mode, in its own words (it's told this).
+    mode_texts = {"talk": TALK_TEXT}
     # How a /skill from the chat is invoked:
     #   "slash":  the prompt starts with /name args (Claude Code)
     #   "dollar": the message mentions $name (Codex)
@@ -41,6 +48,13 @@ class Adapter:
     def skill_files(self, folder):
         """-> (SKILL.md paths, command .md paths) this agent can run from `folder`."""
         return [], []
+
+    def mode_text(self, ability):
+        return self.mode_texts.get(ability) or TALK_TEXT
+
+    def resume_hint(self, session):
+        """Terminal command that continues this session, e.g. 'claude -r <id>'."""
+        return ""
 
 
 # ---------------------------------------------------------------- helpers for adapters

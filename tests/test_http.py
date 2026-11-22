@@ -74,5 +74,36 @@ class Http(ChatTest):
         self.assertNotIn(cid, srv.chats)
 
 
+    def test_create_chat_with_agents(self):
+        code, body = self.req("POST", "/api/chats", {"folder": self.folder, "agents": [
+            {"adapter": "claude"}, {"adapter": "claude", "model": "sonnet"}, {"adapter": "codex"}]})
+        self.assertEqual(code, 200, body)
+        cid = json.loads(body)["id"]
+        chat = json.loads(self.req("GET", f"/api/chats/{cid}")[1])
+        self.assertEqual([a["name"] for a in chat["agents"]], ["Claude 1", "Claude 2", "Codex"])
+        self.assertEqual(chat["agents"][1]["model"], "sonnet")
+        self.assertEqual(chat["aliases"]["claude"], ["claude-1", "claude-2"])
+        self.assertEqual(chat["aliases"]["claude2"], ["claude-2"])
+        self.assertEqual(chat["colors"]["codex"], "#10a37f")
+        self.assertEqual(chat["resume"], {})
+        listing = json.loads(self.req("GET", "/api/chats")[1])
+        self.assertEqual([a["id"] for a in listing["adapters"]], ["claude", "codex"])
+        self.req("POST", f"/api/chats/{cid}/delete", {})
+
+    def test_bad_agents_are_rejected(self):
+        for agents in ([], [{"adapter": "skynet"}], [{"adapter": "claude", "model": "a b"}]):
+            code, body = self.req("POST", "/api/chats", {"folder": self.folder, "agents": agents})
+            self.assertEqual(code, 400, agents)
+            self.assertIn("error", json.loads(body))
+
+    def test_lead_needs_a_reviewer(self):
+        code, body = self.req("POST", "/api/chats", {"folder": self.folder,
+                                                     "agents": [{"adapter": "claude"}]})
+        cid = json.loads(body)["id"]
+        self.req("POST", f"/api/chats/{cid}/settings", {"lead": "claude"})
+        self.assertIsNone(srv.chats[cid].get("lead"))  # nobody to review: Lead + Review stays off
+        self.req("POST", f"/api/chats/{cid}/delete", {})
+
+
 if __name__ == "__main__":
     unittest.main()

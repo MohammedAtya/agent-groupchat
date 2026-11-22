@@ -4,14 +4,15 @@
 Run:  python3 -m agent_groupchat   then open http://127.0.0.1:8765
 
 - Many chats, each saved in ~/.agent-groupchat/chats/<id>.json (sidebar to reopen any of them).
-- Each chat is backed by a REAL Claude Code session and a REAL Codex session,
+- Each chat has any number of agents, including several copies of the same AI
+  ("Claude 1", "Claude 2"). Each agent is a REAL CLI session (Claude Code, Codex),
   so skills, hooks, CLAUDE.md/AGENTS.md, memory and MCP config all load, and the
   sessions can also be continued from a terminal (claude -r / codex resume).
 - Each chat has a project folder and a mode:
     talk : read-only (read files, search, use skills; no edits, no commands)
     work : may edit files and run commands, sandboxed to the chat's folder
 - "Discussion rounds": after both answer you, they can reply to each other.
-- Start a message with @claude or @codex to address only one of them.
+- @name addresses only that agent (@claude-2); @claude reaches every Claude copy.
 """
 import json
 import os
@@ -42,7 +43,8 @@ LOGS_DIR = os.path.join(DATA_DIR, "logs")
 LOG_FILE = os.path.join(LOGS_DIR, "server.log")
 PORT = int(os.environ.get("GROUPCHAT_PORT", "8765"))
 BOT_TIMEOUT = 900  # seconds per reply (work mode can take a while)
-BOTS = tuple(ADAPTERS)  # agent ids, e.g. ("claude", "codex")
+MAX_AGENTS = 12
+LEGACY_AGENTS = [{"adapter": "claude"}, {"adapter": "codex"}]  # default, and chats from before agent lists
 PASS = "PASS"
 MAX_HANDOFFS = 3  # max AI->AI hand-offs after one user message (stops ping-pong)
 
@@ -86,22 +88,13 @@ def abilities(chat):
     return "work" if sandbox_ok() else "edit-only"
 
 
-ABILITY_TEXT = {
-    "talk": "TALK mode: you may read files and use skills, but do not modify anything.",
-    "work": "WORK mode: you may edit files and run commands inside the project folder "
-            "(sandboxed). Coordinate with the other AI so you don't both edit the same files.",
-    "edit-only": "LIMITED WORK mode (sandbox unavailable): Claude may edit files in the project "
-                 "folder but cannot run shell commands; Codex is read-only. Coordinate edits.",
-    "auto": "AUTO mode: Claude runs in Claude Code auto mode and Codex runs with automatic "
-            "approval review. Both may run commands and edit files where the user asks. Codex "
-            "starts sandboxed to the project folder with no internet; if blocked, request "
-            "escalated permissions and the automatic reviewer will approve or deny. Risky "
-            "actions are blocked for both. Do what the user asks.",
-    "auto-limited": "AUTO mode: Claude runs in Claude Code auto mode (may run commands and edit "
-                    "files anywhere the user asks; a safety classifier blocks risky actions). "
-                    "Codex is read-only because its sandbox is unavailable, so Claude should do "
-                    "the hands-on work.",
-}
+def ability_text(chat, bot):
+    """What this agent may do in this chat's mode, in its adapter's own words."""
+    ab = abilities(chat)
+    text = adapter_of(chat, bot).mode_text(ab)
+    if ab != "talk" and len(chat["agents"]) > 1:
+        text += " Coordinate with the other AIs so you don't edit the same files."
+    return text
 
 
 # ---------------------------------------------------------------- storage
@@ -123,26 +116,126 @@ def load_all():
             try:
                 with open(os.path.join(CHATS_DIR, name)) as f:
                     c = json.load(f)
+                if "agents" not in c:  # saved before chats had agent lists: Claude + Codex
+                    c["agents"] = make_agents(LEGACY_AGENTS)
+                for a in c["agents"]:
+                    c["seen"].setdefault(a["id"], 0)
+                    c["sessions"].setdefault(a["id"], None)
                 chats[c["id"]] = c
-                typing[c["id"]] = {b: False for b in BOTS}
+                typing[c["id"]] = {b: False for b in agent_ids(c)}
             except Exception as e:
                 print("could not load", name, e)
 
 
-def new_chat(folder, mode="talk", rounds=0, title=""):
+def new_chat(folder, mode="talk", rounds=0, title="", agents=None):
     cid = uuid.uuid4().hex[:12]
+    agents = make_agents(agents or LEGACY_AGENTS)
+    ids = [a["id"] for a in agents]
     chat = {
         "id": cid, "title": title or "New chat", "folder": folder, "mode": mode,
         "rounds": rounds, "created": time.time(), "updated": time.time(),
+        "agents": agents,
         "messages": [],
-        "seen": {b: 0 for b in BOTS},          # index of first message each bot hasn't seen
-        "sessions": {b: None for b in BOTS},
+        "seen": {b: 0 for b in ids},          # index of first message each agent hasn't seen
+        "sessions": {b: None for b in ids},
     }
     with lock:
         chats[cid] = chat
-        typing[cid] = {b: False for b in BOTS}
+        typing[cid] = {b: False for b in ids}
         save(chat)
     return chat
+
+
+# ---------------------------------------------------------------- agents
+# A chat's agents: [{"id": "claude-2", "adapter": "claude", "name": "Claude 2", "model": None}].
+# The id is fixed when the chat is made (messages, sessions and @mentions use it).
+NAME_RE = re.compile(r"^[\w .'-]{1,40}$")
+MODEL_RE = re.compile(r"^[\w.:/@-]{1,80}$")
+
+
+def slug(name):
+    return re.sub(r"[^\w]+", "-", name.lower()).strip("-_") or "agent"
+
+
+def parse_agents(specs):
+    """Validate agent specs from the page -> [{adapter, name, model}]. Raises ValueError."""
+    if not isinstance(specs, list) or not 1 <= len(specs) <= MAX_AGENTS:
+        raise ValueError(f"A chat needs 1 to {MAX_AGENTS} agents.")
+    out = []
+    for sp in specs:
+        if not isinstance(sp, dict) or sp.get("adapter") not in ADAPTERS:
+            raise ValueError(f"Unknown agent: {sp.get('adapter') if isinstance(sp, dict) else sp}")
+        name = str(sp.get("name") or "").strip()
+        if name and not (NAME_RE.match(name) and re.search(r"[^\W_]", name)):
+            raise ValueError(f"Agent name {name!r}: up to 40 letters, digits, spaces, . ' - _")
+        model = str(sp.get("model") or "").strip()
+        if model and not MODEL_RE.match(model):
+            raise ValueError(f"Model name {model!r} looks wrong (letters, digits, . : / @ - _ only).")
+        out.append({"adapter": sp["adapter"], "name": name, "model": model or None})
+    return out
+
+
+def make_agents(specs):
+    """Specs -> agents with unique ids and names. Unnamed copies of one AI are numbered
+    (Claude 1, Claude 2); a single unnamed one is just "Claude" (id "claude")."""
+    count = {}
+    for sp in specs:
+        count[sp["adapter"]] = count.get(sp["adapter"], 0) + 1
+    nth, agents, names, ids = {}, [], set(), set()
+    for sp in specs:
+        ad = ADAPTERS[sp["adapter"]]
+        nth[ad.id] = nth.get(ad.id, 0) + 1
+        name = sp.get("name") or (ad.name if count[ad.id] == 1 else f"{ad.name} {nth[ad.id]}")
+        base, k = name, 2
+        while name.lower() in names:
+            name, k = f"{base} {k}", k + 1
+        names.add(name.lower())
+        aid, k = slug(name), 2
+        while aid in ids:
+            aid, k = f"{slug(name)}-{k}", k + 1
+        ids.add(aid)
+        agents.append({"id": aid, "adapter": ad.id, "name": name, "model": sp.get("model")})
+    return agents
+
+
+def agent_ids(chat):
+    return [a["id"] for a in chat["agents"]]
+
+
+def agent(chat, aid):
+    return next((a for a in chat["agents"] if a["id"] == aid), None)
+
+
+def adapter_of(chat, aid):
+    return ADAPTERS[agent(chat, aid)["adapter"]]
+
+
+def display(chat, who):
+    """Agent id -> its name ('Claude 2'); 'user' -> 'User'."""
+    a = agent(chat, who)
+    return a["name"] if a else who.capitalize()
+
+
+def aliases(chat):
+    """@-names -> agent ids. Each agent answers to its id and its name, with or without
+    dashes (@claude-2, @claude2, @claude-tester); the AI's id reaches all its copies (@claude)."""
+    out = {}
+    for a in chat["agents"]:
+        for k in (a["id"], slug(a["name"])):
+            for v in (k, k.replace("-", "")):
+                out.setdefault(v, [a["id"]])
+    for a in chat["agents"]:
+        if a["adapter"] not in out:
+            out[a["adapter"]] = [b["id"] for b in chat["agents"] if b["adapter"] == a["adapter"]]
+    return out
+
+
+def reviewer_of(chat, lead):
+    """Lead + Review: the agent after the lead in the chat's list reviews its work."""
+    ids = agent_ids(chat)
+    if lead not in ids or len(ids) < 2:
+        return None
+    return ids[(ids.index(lead) + 1) % len(ids)]
 
 
 def add_msg(chat, who, text, **extra):
@@ -161,19 +254,26 @@ def diff_path(cid, idx):
 
 # ---------------------------------------------------------------- prompts
 def intro(bot, chat):
-    me = ADAPTERS[bot]
-    mode = ABILITY_TEXT[abilities(chat)]
+    me, ad = agent(chat, bot), adapter_of(chat, bot)
+    others = [a for a in chat["agents"] if a["id"] != bot]
+    desc = [f"{a['name']} ({ADAPTERS[a['adapter']].kind}"
+            + (", a separate session of the same AI as you" if a["adapter"] == me["adapter"] else "")
+            + ")" for a in others]
+    with_whom = ("these AI agents: " + "; ".join(desc)) if others else "no other AI agents"
+    labels = ", ".join(f"[{a['name']}]" for a in others)
     return (
-        f"You are {me.name}, a member of a group chat with a human user and "
-        f"{ADAPTERS[other(bot)].description}. "
-        f"Project folder: {chat['folder']}. {mode}\n"
-        "Messages arrive labeled [User], [Claude] or [Codex]. Both AIs get each user message "
-        "at the same time and answer independently; afterwards you may see each other's answers. "
-        "Reply as a group-chat member: concise and conversational, addressing the user or the "
-        "other AI directly. Never prefix your reply with your own name. "
-        f"If you are shown only the other AI's reply and have nothing useful to add, "
+        f"You are {me['name']}, a member of a group chat with a human user and {with_whom}. "
+        f"Project folder: {chat['folder']}. {ability_text(chat, bot)}\n"
+        "Messages arrive labeled [User]"
+        + (f" or with the sender's name ({labels}). Every AI gets each user message at the same "
+           "time and answers independently; afterwards you may see the others' answers. "
+           if others else ". ")
+        + "Reply as a group-chat member: concise and conversational, addressing the user"
+        + (f" or the other AIs directly (@{others[0]['id']} reaches that one only)" if others else "")
+        + ". Never prefix your reply with your own name. "
+        f"If you are shown only other AIs' replies and have nothing useful to add, "
         f"reply with exactly {PASS}."
-        + me.intro_note
+        + ad.intro_note
     )
 
 
@@ -193,11 +293,11 @@ def list_skills(folder):
             meta.get("name") or os.path.basename(os.path.dirname(path))
         if meta.get("user-invocable", "").lower() == "false":
             return
-        s = skills.setdefault(name, {"name": name, "description": "", "hint": "", "bots": []})
+        s = skills.setdefault(name, {"name": name, "description": "", "hint": "", "adapters": []})
         s["description"] = s["description"] or meta.get("description", "")
         s["hint"] = s["hint"] or meta.get("argument-hint", "")
-        if bot not in s["bots"]:
-            s["bots"].append(bot)
+        if bot not in s["adapters"]:
+            s["adapters"].append(bot)
 
     for bot, adapter in ADAPTERS.items():
         files, cmds = adapter.skill_files(folder)
@@ -206,32 +306,38 @@ def list_skills(folder):
         for p in cmds:
             put(p, bot, is_cmd=True)
     for s in skills.values():
-        s["bots"].sort()
+        s["adapters"].sort()
     result = sorted(skills.values(), key=lambda s: s["name"])
     _skill_cache[folder] = (time.time(), result)
     return result
 
 
-_BOT_RE = "|".join(map(re.escape, BOTS))
-SKILL_RE = re.compile(rf"^\s*(?:@(?:{_BOT_RE})\b[\s,:]*)*/([\w:.-]+)(.*)$", re.I | re.S)
+SKILL_RE = re.compile(r"^\s*(?:@[\w-]+[\s,:]*)*/([\w:.-]+)(.*)$", re.I | re.S)
 
 
 def parse_skill(text, folder):
-    """'/grill-me my plan' or '@codex /grill-me my plan' -> {'name','args','bots'}."""
+    """'/grill-me my plan' or '@codex /grill-me my plan' -> {'name','args','adapters'}."""
     m = SKILL_RE.match(text)
     if not m:
         return None
     name = m.group(1)
     for s in list_skills(folder):
         if s["name"].lower() == name.lower():
-            return {"name": s["name"], "args": m.group(2).strip(), "bots": s["bots"]}
+            return {"name": s["name"], "args": m.group(2).strip(), "adapters": s["adapters"]}
     return None
 
 
-def mentioned(text):
-    """Bots @-mentioned anywhere in text, e.g. '@claude', 'hey @Codex,'."""
-    found = {m.lower() for m in re.findall(rf"(?<![\w@])@({_BOT_RE})\b", text, re.I)}
-    return [b for b in BOTS if b in found]
+def skill_adapters(sk):
+    return sk.get("adapters", sk.get("bots", [])) if sk else []  # "bots": saved before M2
+
+
+def mentioned(chat, text):
+    """Agents @-mentioned anywhere in text, e.g. '@claude-2', 'hey @Codex,', in chat order."""
+    al = aliases(chat)
+    alts = "|".join(re.escape(k) for k in sorted(al, key=len, reverse=True))
+    found = {b for k in re.findall(rf"(?<![\w@])@({alts})(?![\w-])", text, re.I)
+             for b in al[k.lower()]}
+    return [b for b in agent_ids(chat) if b in found]
 
 
 def unseen_for(chat, bot):
@@ -248,30 +354,30 @@ def unseen_for(chat, bot):
                    if m["who"] != bot or (m.get("meta") or {}).get("role") == "summary"]
 
 
-def label(m):
+def label(chat, m):
     if (m.get("meta") or {}).get("role") == "summary":
         return "Chat summary"
-    return display(m["who"])
+    return display(chat, m["who"])
 
 
-def display(who):
-    """'claude' -> 'Claude' (the adapter's name), 'user' -> 'User'."""
-    return ADAPTERS[who].name if who in ADAPTERS else who.capitalize()
-
-
-def format_msgs(msgs):
-    return "\n\n".join(f"[{label(m)}]: {m['text']}" for m in msgs)
+def format_msgs(chat, msgs):
+    return "\n\n".join(f"[{label(chat, m)}]: {m['text']}" for m in msgs)
 
 
 def route(chat, m):
-    """Who a user message goes to: (bots that answer it, lead bot if Lead + Review)."""
-    sk, at = m.get("skill"), mentioned(m["text"])
-    lead = chat.get("lead") if chat.get("lead") in BOTS else None
-    # @claude / @codex anywhere addresses only those bots; the other one stays silent and
-    # reads it as context later. A /skill goes to whoever has it. With a lead set, a
-    # plain message goes to the lead and the other one reviews.
+    """Who a user message goes to: (agents that answer it, lead if Lead + Review)."""
+    ids = agent_ids(chat)
+    sk, at = m.get("skill"), mentioned(chat, m["text"])
+    lead = chat.get("lead") if reviewer_of(chat, chat.get("lead")) else None
+    # @name anywhere addresses only those agents; the others stay silent and read it as
+    # context later. A /skill goes to every agent whose AI has it. With a lead set, a
+    # plain message goes to the lead and the next agent reviews.
     led = lead if lead and not at and not sk else None
-    return (at or (sk["bots"] if sk else [led] if led else list(BOTS))), led
+    if at:
+        return at, led
+    if sk:
+        return [b for b in ids if agent(chat, b)["adapter"] in skill_adapters(sk)], led
+    return ([led] if led else ids), led
 
 
 def set_status(chat, idxs, bot, st, only=None):
@@ -380,12 +486,12 @@ def run_agent(chat, bot, prompt, ab):
             save(chat)
 
     ctx = RunContext(
-        folder=chat["folder"], session=chat["sessions"].get(bot),
+        folder=chat["folder"], session=chat["sessions"].get(bot), model=agent(chat, bot)["model"],
         system_prompt=intro(bot, chat), save_session=save_session,
         step=lambda text: step(chat, bot, text),
         preview=lambda text, append=False: set_text(chat, bot, text, append),
         stream=lambda cmd, on_event: stream(chat, bot, cmd, on_event))
-    return ADAPTERS[bot].run(ctx, prompt, ab)
+    return adapter_of(chat, bot).run(ctx, prompt, ab)
 
 
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", ".mypy_cache",
@@ -484,16 +590,16 @@ def ask(chat, bot, extra="", readonly=False, role=None):
     with lock:
         told = chat.setdefault("told", {})
         if told.get(bot) not in (None, ab):  # mode changed since this bot's last turn
-            note = f"[System]: Permissions changed. {ABILITY_TEXT[ab]}\n\n"
+            note = f"[System]: Permissions changed. {ability_text(chat, bot)}\n\n"
         told[bot] = ab
     last_user = next((m for m in reversed(msgs) if m["who"] == "user"), None)
     sk = last_user.get("skill") if last_user else None
-    if sk and bot not in sk["bots"]:
+    if sk and agent(chat, bot)["adapter"] not in skill_adapters(sk):
         sk = None
-    syntax = ADAPTERS[bot].skill_syntax
+    syntax = adapter_of(chat, bot).skill_syntax
     if sk and syntax == "slash":
         # e.g. Claude Code runs a skill when the prompt *starts* with /name (like the terminal)
-        ctx = note + format_msgs([m for m in msgs if m is not last_user])
+        ctx = note + format_msgs(chat, [m for m in msgs if m is not last_user])
         prompt = f"/{sk['name']} {sk['args']}".strip()
         if ctx.strip():
             prompt += "\n\n(Group-chat messages since your last turn, for context:\n" + ctx + ")"
@@ -502,14 +608,14 @@ def ask(chat, bot, extra="", readonly=False, role=None):
         shown = [dict(m, text=re.sub(r"/" + re.escape(sk["name"]) + r"\b", "$" + sk["name"],
                                      m["text"], count=1, flags=re.I))
                  if m is last_user else m for m in msgs]
-        prompt = note + format_msgs(shown) + extra
+        prompt = note + format_msgs(chat, shown) + extra
     else:
-        prompt = note + format_msgs(msgs) + extra
+        prompt = note + format_msgs(chat, msgs) + extra
     before = snapshot(chat["folder"])
     start = time.time()
     with lock:
         mine = runs.setdefault(chat["id"], {})[bot] = [start, None]
-        typing[chat["id"]][bot] = True
+        typing.setdefault(chat["id"], {})[bot] = True
         activity.setdefault(chat["id"], {})[bot] = {
             "since": start, "steps": [],
             "role": {"summary": "summarizing"}.get(role, "reviewing" if readonly else "")}
@@ -524,9 +630,9 @@ def ask(chat, bot, extra="", readonly=False, role=None):
             activity.get(chat["id"], {}).pop(bot, None)
     with lock:
         mine[1] = time.time()
-        o = runs[chat["id"]].get(other(bot))
-        overlap = bool(o) and o[0] < mine[1] and (o[1] is None or o[1] > start)
-    if before is not None and not overlap:  # alone in the folder: every change is this bot's
+        overlap = any(o[0] < mine[1] and (o[1] is None or o[1] > start)
+                      for b, o in runs[chat["id"]].items() if b != bot)
+    if before is not None and not overlap:  # alone in the folder: every change is this agent's
         after = snapshot(chat["folder"])
         if after is not None:
             meta["files"] = list(dict.fromkeys((meta.get("files") or [])
@@ -564,26 +670,20 @@ def parallel(chat, bots, extra="", extras=None):
     return results
 
 
-ROUND_NOTE = (f"\n\n(Discussion round: respond to the other AI if useful, "
+ROUND_NOTE = (f"\n\n(Discussion round: respond to the other AIs if useful, "
               f"otherwise reply exactly {PASS}.)")
-HANDOFF_NOTE = ("\n\n(The other AI addressed you directly above. Answer it, or do what it "
+HANDOFF_NOTE = ("\n\n(Another AI addressed you directly above. Answer it, or do what it "
                 "asks if that fits what the user asked for; otherwise reply exactly " + PASS + ".)")
-_ADDRESS = {b: re.compile(rf"(?:^|[.!?]\s+|\n\s*)(?:hey\s+|ok\s+|so\s+)?{b}\s*[,:]", re.I)
-            for b in BOTS}
-
-
-def addressed(text, bot):
+def addressed(chat, text, bot):
     """Does this text speak to `bot` directly? '@codex …' or 'Codex, please …'."""
-    return bot in mentioned(text) or bool(_ADDRESS[bot].search(text))
-
-
-def other(bot):
-    """The other agent (the chat has exactly two for now)."""
-    return next(b for b in BOTS if b != bot)
+    if bot in mentioned(chat, text):
+        return True
+    name = re.escape(display(chat, bot))
+    return bool(re.search(rf"(?:^|[.!?]\s+|\n\s*)(?:hey\s+|ok\s+|so\s+)?{name}\s*[,:]", text, re.I))
 
 
 def pending(chat):
-    """(bots that still owe a reply to SOME user message, skill of the latest one,
+    """(agents that still owe a reply to SOME user message, skill of the latest one,
     lead bot if the latest one goes to the lead for Lead + Review).
     Checks every user message, not just the latest, so '@codex X' followed quickly by
     '@claude Y' still gets Codex's answer to X."""
@@ -594,8 +694,8 @@ def pending(chat):
                 continue
             sk = m.get("skill")
             want, led = route(chat, m)
-            targets += [b for b in want if chat["seen"][b] <= i and b not in targets]
-        return [b for b in BOTS if b in targets], sk, led
+            targets += [b for b in want if chat["seen"].get(b, 0) <= i and b not in targets]
+        return [b for b in agent_ids(chat) if b in targets], sk, led
 
 
 def user_waiting(chat):
@@ -617,22 +717,26 @@ LEAD_NOTE = ("\n\n(Lead + Review: you are the lead for this message. Only you re
              "No need to coordinate edits with {reviewer}.)")
 
 
-def review(chat, lead):
-    """Lead + Review: the other AI reviews what the lead just did, read-only."""
+def review(chat, lead, reviewer=None):
+    """Lead + Review: the reviewer (by default the agent after the lead) checks what the
+    lead just did, read-only."""
+    reviewer = reviewer or reviewer_of(chat, lead)
+    if not reviewer:
+        return
     with lock:
         last = next((m for m in reversed(chat["messages"]) if m["who"] == lead), None)
     if user_waiting(chat) or not last or last["text"].startswith("("):  # (error)/(stopped)…
         set_status(chat, (last.get("meta") or {}).get("for", []) if last else [],
-                   other(lead), "skipped", only=("queued",))
+                   reviewer, "skipped", only=("queued",))
         return
     files = (last.get("meta") or {}).get("files") or []
-    ask(chat, other(lead), REVIEW_NOTE.format(
-        lead=display(lead), files=f" (files changed: {', '.join(files)})" if files else ""),
+    ask(chat, reviewer, REVIEW_NOTE.format(
+        lead=display(chat, lead), files=f" (files changed: {', '.join(files)})" if files else ""),
         readonly=True)
 
 
 def discuss(chat, bots):
-    """Discussion rounds, taking turns: each AI sees what the other just said."""
+    """Discussion rounds, taking turns: each AI sees what the others just said."""
     for _ in range(int(chat.get("rounds", 0))):
         spoke = False
         for b in bots:
@@ -644,17 +748,17 @@ def discuss(chat, bots):
 
 
 def handoffs(chat, skip):
-    """A reply that speaks to the other AI reaches it when the user's message was
-    @-addressed to only one of them (e.g. read-only Codex asking Claude to write files).
-    Bots in `skip` already answered the user; for them only Discussion rounds apply, so
-    'Codex, your turn' in a reply to both doesn't trigger a second answer."""
+    """A reply that speaks to another AI reaches it when the user's message was
+    @-addressed to only some of them (e.g. read-only Codex asking Claude to write files).
+    Agents in `skip` already answered the user; for them only Discussion rounds apply, so
+    'Codex, your turn' in a reply to everyone doesn't trigger a second answer."""
     for _ in range(MAX_HANDOFFS):
         if user_waiting(chat):
             return
         with lock:
-            to = [b for b in BOTS if b not in skip
-                  and any(m["who"] not in ("user", b) and addressed(m["text"], b)
-                         for m in chat["messages"][chat["seen"][b]:])]
+            to = [b for b in agent_ids(chat) if b not in skip
+                  and any(m["who"] not in ("user", b) and addressed(chat, m["text"], b)
+                         for m in chat["messages"][chat["seen"].get(b, 0):])]
         if not to:
             return
         for b in to:
@@ -674,20 +778,21 @@ def worker(chat, first=None):
                         for b, st in (m.get("status") or {}).items():
                             if st in ("queued", "running"):
                                 m["status"][b] = "stopped"
-                    for b in BOTS:
+                    for b in agent_ids(chat):
                         chat["seen"][b] = len(chat["messages"])
                     save(chat)
                     return
             targets, sk, led = pending(chat)
             if not targets:
                 return
+            rev = reviewer_of(chat, led) if led else None
             res = parallel(chat, targets, extras={led: LEAD_NOTE.format(
-                reviewer=display(other(led)))} if led else None)
+                reviewer=display(chat, rev))} if led else None)
             if led in targets and res.get(led) not in (None, PASS):
                 review(chat, led)
-            elif len(targets) == 2 and not sk:  # no auto back-and-forth during a skill
+            elif len(targets) >= 2 and not sk:  # no auto back-and-forth during a skill
                 discuss(chat, targets)
-            handoffs(chat, targets + ([other(led)] if led else []))
+            handoffs(chat, targets + ([rev] if rev else []))
     finally:
         with lock:
             workers.pop(chat["id"], None)
@@ -715,43 +820,44 @@ def retry(chat, idx):
         save(chat)
     set_status(chat, users, bot, "queued")
     if meta.get("role") == "review":
-        return review(chat, other(bot))
-    is_lead = chat.get("lead") == bot
-    if ask(chat, bot, LEAD_NOTE.format(reviewer=display(other(bot))) if is_lead else "") \
-            not in (None, PASS) and is_lead:
+        lead = chat.get("lead")
+        return review(chat, lead, reviewer=bot) if lead in agent_ids(chat) and lead != bot else None
+    rev = reviewer_of(chat, bot) if chat.get("lead") == bot else None
+    if ask(chat, bot, LEAD_NOTE.format(reviewer=display(chat, rev)) if rev else "") \
+            not in (None, PASS) and rev:
         review(chat, bot)
 
 
 SUMMARY_NOTE = ("\n\n(The user pressed Compact. Write a summary of this whole group chat that "
-                "you and the other AI can continue from in fresh sessions: the goal, decisions, "
+                "you and the other AIs can continue from in fresh sessions: the goal, decisions, "
                 "what was done (files changed), open questions and next steps. Markdown bullets, "
                 "at most ~300 words. Reply with the summary only.)")
 
 
 def compact(chat):
-    """Summarize the chat, then start fresh Claude and Codex sessions from the summary,
-    so long chats stop re-reading their whole history on every reply."""
+    """The first agent summarizes the chat, then every agent starts a fresh session from
+    the summary, so long chats stop re-reading their whole history on every reply."""
     with lock:
         chat["messages"].append({"who": "system", "text": "Compact: summarize this chat.",
                                  "ts": time.time(), "hidden": True})
         save(chat)
-    reply = ask(chat, "claude", SUMMARY_NOTE, readonly=True, role="summary")
+    reply = ask(chat, agent_ids(chat)[0], SUMMARY_NOTE, readonly=True, role="summary")
     if reply in (None, PASS) or reply.startswith("("):
         return
     with lock:
         old = chat["sessions"]
         chat.setdefault("old_sessions", []).append(old)
-        chat["sessions"] = {b: None for b in BOTS}
+        chat["sessions"] = {b: None for b in agent_ids(chat)}
         chat["told"] = {}
-        idx = len(chat["messages"]) - 1  # the summary: both new sessions start from it
-        for b in BOTS:
+        idx = len(chat["messages"]) - 1  # the summary: all new sessions start from it
+        for b in agent_ids(chat):
             chat["seen"][b] = idx
         chat["messages"][idx]["meta"]["old_sessions"] = old
         save(chat)
 
 
 def export_md(chat):
-    names = {"user": "You", **{b: a.name for b, a in ADAPTERS.items()}}
+    names = {"user": "You", **{a["id"]: a["name"] for a in chat["agents"]}}
     out = [f"# {chat['title']}", "",
            f"Folder: `{chat['folder']}` · mode: {chat['mode']} · exported "
            f"{time.strftime('%Y-%m-%d %H:%M')}", ""]
@@ -805,7 +911,9 @@ class Handler(BaseHTTPRequestHandler):
                 lst = sorted(({k: c[k] for k in ("id", "title", "updated", "folder", "mode")}
                               for c in chats.values()), key=lambda c: -c["updated"])
             return self.send_json({"chats": lst, "home": os.path.expanduser("~"),
-                                   "sandbox": sandbox_ok()})
+                                   "sandbox": sandbox_ok(),
+                                   "adapters": [{"id": a.id, "name": a.name, "color": a.color}
+                                                for a in ADAPTERS.values()]})
         m = re.fullmatch(r"/api/chats/(\w+)/skills", p)
         if m:
             c = chats.get(m.group(1))
@@ -839,7 +947,13 @@ class Handler(BaseHTTPRequestHandler):
             if not c:
                 return self.send_json({"error": "not found"}, 404)
             with lock:
-                return self.send_json({**c, "typing": typing[c["id"]],
+                return self.send_json({**c, "typing": typing.get(c["id"], {}),
+                                       "aliases": aliases(c),
+                                       "colors": {a["id"]: ADAPTERS[a["adapter"]].color
+                                                  for a in c["agents"]},
+                                       "resume": {b: adapter_of(c, b).resume_hint(sid)
+                                                  for b, sid in c["sessions"].items()
+                                                  if sid and agent(c, b)},
                                        "activity": activity.get(c["id"], {}),
                                        "busy": c["id"] in workers})
         with open(PAGE_FILE, "rb") as f:
@@ -864,7 +978,12 @@ class Handler(BaseHTTPRequestHandler):
             if not os.path.isdir(folder):
                 return self.send_json({"error": f"Folder does not exist: {folder}"}, 400)
             mode = d.get("mode") if d.get("mode") in ("talk", "work", "auto") else "talk"
-            c = new_chat(folder, mode, int(d.get("rounds") or 0), (d.get("title") or "").strip())
+            try:
+                agents = parse_agents(d["agents"]) if d.get("agents") is not None else None
+            except ValueError as e:
+                return self.send_json({"error": str(e)}, 400)
+            c = new_chat(folder, mode, int(d.get("rounds") or 0), (d.get("title") or "").strip(),
+                         agents)
             return self.send_json({"id": c["id"]})
         m = re.fullmatch(r"/api/chats/(\w+)/(send|settings|delete|stop|retry|compact)", p)
         c = chats.get(m.group(1)) if m else None
@@ -880,7 +999,7 @@ class Handler(BaseHTTPRequestHandler):
                 halted.discard(c["id"])
             msg = {"text": text, **({"skill": sk} if sk else {})}
             want, led = route(c, msg)
-            to = want + ([other(led)] if led else [])
+            to = want + ([reviewer_of(c, led)] if led else [])
             add_msg(c, "user", text, to=to, status={b: "queued" for b in to},
                     **({"skill": sk} if sk else {}))
             kick(c)
@@ -892,7 +1011,7 @@ class Handler(BaseHTTPRequestHandler):
             if action == "retry":
                 i = d.get("index")
                 if not isinstance(i, int) or not 0 <= i < len(c["messages"]) \
-                        or c["messages"][i]["who"] not in BOTS \
+                        or c["messages"][i]["who"] not in agent_ids(c) \
                         or outcome(c["messages"][i]["text"]) == "done":
                     return self.send_json({"error": "nothing to retry"}, 400)
                 kick(c, lambda: retry(c, i))
@@ -902,7 +1021,7 @@ class Handler(BaseHTTPRequestHandler):
             with lock:  # kill running agents and cancel the rest of this turn
                 if c["id"] in workers:
                     halted.add(c["id"])
-                running = [procs.get((c["id"], b)) for b in BOTS]
+                running = [procs.get((c["id"], b)) for b in agent_ids(c)]
             for pr in running:
                 if pr:
                     kill(pr, "stopped")
@@ -910,7 +1029,7 @@ class Handler(BaseHTTPRequestHandler):
             with lock:
                 if d.get("mode") in ("talk", "work", "auto"):
                     c["mode"] = d["mode"]
-                if d.get("lead") in ("", *BOTS):
+                if d.get("lead") == "" or reviewer_of(c, d.get("lead")):
                     c["lead"] = d["lead"] or None
                 if "rounds" in d:
                     c["rounds"] = max(0, min(5, int(d["rounds"])))

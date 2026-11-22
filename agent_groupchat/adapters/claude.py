@@ -4,7 +4,7 @@ import os
 import uuid
 
 from ..skills import HOME, ancestors, scan_skill_dirs
-from .base import Adapter, add_file, error_text, first_line, rel
+from .base import TALK_TEXT, Adapter, add_file, error_text, first_line, rel
 
 READ_TOOLS = ["Read", "Glob", "Grep", "WebSearch", "WebFetch", "Skill", "TodoWrite"]
 EDIT_TOOLS = READ_TOOLS + ["Edit", "Write", "NotebookEdit"]
@@ -57,9 +57,20 @@ def describe_tool(name, inp, folder):
 class ClaudeAdapter(Adapter):
     id = "claude"
     name = "Claude"
-    description = "Claude (Anthropic's Claude Code)"
+    kind = "Anthropic's Claude Code"
+    color = "#c96442"
     skill_syntax = "slash"
     command = ["claude"]
+    mode_texts = {
+        "talk": TALK_TEXT,
+        "work": "WORK mode: you may edit files and run commands inside the project folder "
+                "(sandboxed).",
+        "edit-only": "LIMITED WORK mode (sandbox unavailable): you may edit files in the project "
+                     "folder but cannot run shell commands.",
+        "auto": "AUTO mode: you run in Claude Code auto mode: you may run commands and edit "
+                "files where the user asks; a safety classifier blocks risky actions.",
+    }
+    mode_texts["auto-limited"] = mode_texts["auto"]
 
     def run(self, ctx, prompt, ability):
         sid = ctx.session
@@ -71,6 +82,8 @@ class ClaudeAdapter(Adapter):
             sid = str(uuid.uuid4())
             cmd += ["--session-id", sid]
         cmd += PERMISSIONS.get(ability, PERMISSIONS["talk"])
+        if ctx.model:
+            cmd += ["--model", ctx.model]
         cmd += ["--", prompt]
         out = {"files": [], "result": None, "started": False}
 
@@ -114,6 +127,9 @@ class ClaudeAdapter(Adapter):
         if res and not res.get("is_error") and text:
             return text, meta
         return error_text(text, err, code), meta
+
+    def resume_hint(self, session):
+        return f"claude -r {session}"
 
     def skill_files(self, folder):
         roots = [os.path.join(HOME, ".claude", "skills")]

@@ -116,7 +116,9 @@ class ClaudeCommand(ChatTest):
         argv = self.calls("claude")[0]["argv"]
         intro = argv[argv.index("--append-system-prompt") + 1]
         self.assertIn("You are Claude, a member of a group chat with a human user and "
-                      "Codex (OpenAI's coding agent).", intro)
+                      "these AI agents: Codex (OpenAI's coding agent).", intro)
+        self.assertIn("([Codex])", intro)
+        self.assertIn("@codex reaches that one only", intro)
         self.assertIn(f"Project folder: {self.folder}.", intro)
         self.assertIn("TALK mode", intro)
         self.assertNotIn("sandbox mount points", intro)
@@ -200,7 +202,8 @@ class CodexCommand(ChatTest):
         self.run_one("talk")
         prompt = self.calls("codex")[0]["argv"][-1]
         self.assertTrue(prompt.startswith("You are Codex, a member of a group chat with a human "
-                                          "user and Claude (Anthropic's Claude Code)."), prompt)
+                                          "user and these AI agents: Claude (Anthropic's Claude "
+                                          "Code)."), prompt)
         self.assertIn("sandbox mount points", prompt)
         self.assertTrue(prompt.endswith("\n\n[User]: @codex hi"), prompt)
 

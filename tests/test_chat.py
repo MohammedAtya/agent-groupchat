@@ -70,7 +70,7 @@ class Handoffs(ChatTest):
         c = self.chat()
         self.send(c, "@claude hi")
         self.assertEqual([m["who"] for m in self.replies(c)], ["claude", "codex"])
-        self.assertIn("(The other AI addressed you directly", self.calls("codex")[0]["argv"][-1])
+        self.assertIn("(Another AI addressed you directly", self.calls("codex")[0]["argv"][-1])
 
     def test_name_with_comma_counts_as_addressing(self):
         self.rules({"style": "codex", "reply": "Claude, please write the file."})
@@ -149,7 +149,7 @@ class Skills(ChatTest):
         self.make_skill(".claude", "gc-test-both")
         self.make_skill(".agents", "gc-test-both")
         s = [s for s in srv.list_skills(self.folder) if s["name"] == "gc-test-both"]
-        self.assertEqual(s[0]["bots"], ["claude", "codex"])
+        self.assertEqual(s[0]["adapters"], ["claude", "codex"])
 
 
 class Compact(ChatTest):

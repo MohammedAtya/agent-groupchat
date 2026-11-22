@@ -49,8 +49,11 @@ class ChatTest(unittest.TestCase):
     def rules(self, *rules):
         os.environ["FAKE_RULES"] = json.dumps(list(rules))
 
-    def chat(self, mode="talk", rounds=0, lead=None):
-        c = srv.new_chat(self.folder, mode, rounds, "test")
+    def chat(self, mode="talk", rounds=0, lead=None, agents=None):
+        """agents: e.g. ["claude", "claude", "codex"] or [{"adapter": "claude", "name": "X"}]."""
+        specs = [a if isinstance(a, dict) else {"adapter": a} for a in agents] if agents else None
+        c = srv.new_chat(self.folder, mode, rounds, "test",
+                         srv.parse_agents(specs) if specs else None)
         c["lead"] = lead
         return c
 
@@ -59,7 +62,7 @@ class ChatTest(unittest.TestCase):
         sk = srv.parse_skill(text, c["folder"])
         msg = {"text": text, **({"skill": sk} if sk else {})}
         want, led = srv.route(c, msg)
-        to = want + ([srv.other(led)] if led else [])
+        to = want + ([srv.reviewer_of(c, led)] if led else [])
         srv.add_msg(c, "user", text, to=to, status={b: "queued" for b in to},
                     **({"skill": sk} if sk else {}))
         srv.worker(c)
