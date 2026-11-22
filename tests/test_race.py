@@ -161,12 +161,12 @@ class Choose(RaceTest):
             if c["id"] not in srv.workers and c["race"]["stage"] == "done":
                 break
             time.sleep(0.05)
-        comb = r["copies"]["combined"]
+        comb = r["copies"]["_combined"]
         self.assertEqual((comb["agent"], comb["status"]), ("claude-1", "done"))  # the Lead fixes it
         self.assertEqual(self.read(comb["folder"], "app.py"), "combined\n")
         prompt = next(x for x in self.calls() if "(⚡ Race · Combine" in x["argv"][-1])["argv"][-1]
         self.assertIn("conflict markers: app.py", prompt)
-        self.assertEqual(srv.race_action(c, {"action": "use", "copy": "combined"})[0], 200)
+        self.assertEqual(srv.race_action(c, {"action": "use", "copy": "_combined"})[0], 200)
         self.assertEqual(self.read(self.folder, "app.py"), "combined\n")
 
     def test_discard_and_delete_remove_the_copies(self):

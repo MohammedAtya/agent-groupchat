@@ -127,6 +127,16 @@ def migrate(c):
     c.setdefault("lock", False)
     c.setdefault("fix_rounds", 1)
     c.setdefault("flow", None)
+    r = c.get("race")
+    if r:
+        r.setdefault("scope", (r.get("sub") or ".").replace(os.sep, "/"))
+        if r["stage"] in RUNNING:  # interrupted by a restart: never pick it up half-way later
+            r["stage"], r["interrupted"] = "stopped", True
+            r.pop("combine", None)
+            r.pop("retry", None)
+            for cp in r["copies"].values():
+                if cp.get("status") == "working":
+                    cp["status"] = "stopped"
 
 
 def new_chat(folder, rounds=0, title="", agents=None, lock=False, fix_rounds=1):
@@ -221,6 +231,10 @@ def parse_agents(specs):
     return out
 
 
+WINDOWS_RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)),
+                    *(f"LPT{i}" for i in range(1, 10))}
+
+
 def make_agents(specs):
     """Specs -> agents with unique ids and names. Unnamed copies of one AI are numbered
     (Claude 1, Claude 2); a single unnamed one is just "Claude" (id "claude")."""
@@ -237,8 +251,11 @@ def make_agents(specs):
             name, k = f"{base} {k}", k + 1
         names.add(name.lower())
         aid, k = slug(name), 2
+        if aid.upper() in WINDOWS_RESERVED:  # can't be a folder name on Windows (copies use it)
+            aid = f"{aid}-agent"
+        first_id = aid
         while aid in ids:
-            aid, k = f"{slug(name)}-{k}", k + 1
+            aid, k = f"{first_id}-{k}", k + 1
         ids.add(aid)
         agents.append({"id": aid, "adapter": ad.id, "name": name, "model": sp.get("model"),
                        "roles": list(sp.get("roles") or []), "level": sp.get("level")})
@@ -600,6 +617,8 @@ def route(chat, m):
     in a chat with roles: the participants answer it directly and the workflow does the rest."""
     if m.get("mode") in ("race", "split", "split-feedback"):  # handled by step_race
         return [], False
+    if m.get("mode") == "no-split":  # the Lead's flow, or just one agent
+        return ([] if m.get("flow") else [m["only"]]), False
     ids = agent_ids(chat)
     sk, at = m.get("skill"), mentioned(chat, m["text"])
     # @name anywhere addresses only those agents; the others stay silent and read it as
@@ -649,6 +668,16 @@ def kill(p, reason):
     plat.kill_tree(p)
 
 
+GIT_REDIRECT = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_COMMON_DIR",
+                "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE")
+
+
+def agent_env():
+    """The agents' environment, minus git variables that would send their git commands (in a
+    copy, or the project) to another repository or index."""
+    return {k: v for k, v in os.environ.items() if k.upper() not in GIT_REDIRECT}
+
+
 def stream(chat, bot, cmd, on_event, cwd=None):
     """Run an agent CLI in the chat's folder (or `cwd`: a Race copy), passing each JSON line
     of its stdout to on_event.
@@ -660,7 +689,7 @@ def stream(chat, bot, cmd, on_event, cwd=None):
         return 1, str(e), None
     with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as err:
         try:
-            p = subprocess.Popen(cmd, cwd=cwd or chat["folder"], stdin=subprocess.DEVNULL,
+            p = subprocess.Popen(cmd, cwd=cwd or chat["folder"], stdin=subprocess.DEVNULL, env=agent_env(),
                                  stdout=subprocess.PIPE, stderr=err, text=True,
                                  encoding="utf-8", errors="replace",
                                  **plat.popen_kwargs())  # own process group, for Stop
@@ -1188,7 +1217,14 @@ def step_flow(chat):
 # the tests in every copy, the Reviewer compares them (PICK: <agent>), and the user picks one
 # ("Use this one"), combines two, or discards them. Race turns run in fresh sessions inside
 # the copies (CLIs keep sessions per folder), given the chat so far or one shared summary.
+# Nothing here may change the user's folder before "Use this one": agents in the user's folder
+# during a Race/Split (Reviewer, Planner) are capped at Read.
 CONTEXT_LIMIT = 30_000  # characters of chat history sent as-is; above it, one shared summary
+# Diffs in a review prompt, in total. Lower on native Windows: prompts travel on the command
+# line there, which is limited to 32,767 characters.
+REVIEW_BUDGET = 16_000 if plat.IS_WINDOWS else 45_000
+RESULT = "_combined"  # copy name of a Combine / a Split's result (agent ids never start with _)
+RUNNING = ("work", "retry", "test", "review", "combine", "plan", "parts", "merge", "check", "fix")
 RACE_NOTE = ("\n\n(⚡ Race: you and {others} got this same task at the same time, each in your own copy "
              "of the project. Your copy is {folder}; work only there (the user's real folder stays "
              "untouched until they pick a copy). Do the task completely, run the tests if there are "
@@ -1200,8 +1236,8 @@ RACE_TEST_NOTE = ("\n\n(⚡ Race · Tester: this folder ({folder}) is {name}'s c
 RACE_REVIEW_NOTE = ("\n\n(⚡ Race · Reviewer: {n} agents each did the user's latest request above in their own "
                     "copy of the project. Their changes and test results are below. Compare them: "
                     "correctness, completeness, code quality, tests. Say briefly which is best and why, "
-                    "and what the others did better if anything. End with exactly one line: "
-                    "PICK: <agent id> (one of: {ids}).)\n\n{copies}")
+                    "and what the others did better if anything. Don't change any files. End with "
+                    "exactly one line: PICK: <agent id> (one of: {ids}).)\n\n{copies}")
 COMBINE_NOTE = ("\n\n(⚡ Race · Combine: the user asked to combine {names}'s versions of this task in this "
                 "folder ({folder}). Git merged them{conflicts}. Make one working version that keeps the "
                 "best of both, make sure no conflict markers (<<<<<<< ======= >>>>>>>) are left, run the "
@@ -1230,7 +1266,7 @@ def race_check(chat):
         return st["reason"]
     if len(racers(chat)) < 2:
         return "needs 2 or more agents that can edit files (Leads or agents without a role)"
-    if chat["id"] in workers:
+    if chat["id"] in workers or (chat.get("race") or {}).get("stage") in RUNNING:
         return "wait until the agents have finished"
     return ""
 
@@ -1240,45 +1276,70 @@ def race_view(chat):
     r = chat.get("race")
     if not r:
         return None
-    keep = ("agent", "name", "status", "files", "diff", "tests", "test_warn", "msg", "from", "part")
+    keep = ("agent", "name", "status", "files", "diff", "tests", "test_warn", "msg", "from", "part", "warn")
     return {"kind": r.get("kind", "race"), "parts": r.get("parts"), "fix": r.get("fix", 0),
+            "interrupted": r.get("interrupted", False),
             "stage": r["stage"], "msg": r["msg"], "pick": r.get("pick"), "used": r.get("used"),
             "copies": {n: {k: c[k] for k in keep if k in c} for n, c in r["copies"].items()}}
 
 
 def discard_race(chat):
-    """Delete the Race's copies, branches and snapshot (SPEC §14.5)."""
+    """Delete the Race's copies, branches and snapshot (SPEC §14.5). -> problems."""
     r = chat.get("race")
     if not r:
-        return
+        return []
     try:
-        copies.remove_copies(r["root"], [c["path"] for c in r["copies"].values()],
-                             [c["branch"] for c in r["copies"].values()], [r["ref"]])
+        problems = copies.remove_copies(r["root"], [c["path"] for c in r["copies"].values()],
+                                        [c["branch"] for c in r["copies"].values()], [r["ref"]])
     except Exception as e:
-        print("couldn't remove the race copies:", e, flush=True)
+        problems = [str(e)]
     shutil.rmtree(os.path.join(DATA_DIR, "worktrees", chat["id"]), ignore_errors=True)
     chat["race"] = None
+    return problems
+
+
+def new_base(chat):
+    """Snapshot the chat's folder for a Race/Split. Refuses projects with symlinks that point
+    outside them: an agent writing through one in its copy would change the user's files."""
+    root = copies.repo_root(chat["folder"])
+    ref = f"refs/agent-groupchat/{chat['id']}/base"
+    base = copies.snapshot(chat["folder"], ref)
+    bad = copies.unsafe_links(root, base)
+    if bad:
+        copies.git(root, "update-ref", "-d", ref, check=False)
+        raise ValueError("this project has symlinks that point outside it (" + ", ".join(bad[:5])
+                         + "); an agent writing through one would change your real files, so "
+                           "Race and Split are off here")
+    return {"root": root, "scope": copies.scope_of(root, chat["folder"]), "ref": ref, "base": base,
+            "submodules": copies.has_submodules(root, base)}
+
+
+def note_submodules(chat, r):
+    if r.get("submodules"):
+        add_msg(chat, "system", "This project has git submodules. They aren't copied, so the agents' "
+                                "copies have them empty, and changes to them can't be raced or split.")
 
 
 def start_race(chat, text):
     """⚡ Race: post the message and snapshot the folder; the worker runs the rest."""
-    why = race_check(chat)
-    if why:
-        raise ValueError(f"Can't start a Race: {why}.")
     with lock:
+        why = race_check(chat)
+        if why:
+            raise ValueError(f"Can't start a Race: {why}.")
         discard_race(chat)  # the previous Race's copies go now
-        root = copies.repo_root(chat["folder"])
-        sub = os.path.relpath(os.path.realpath(chat["folder"]), root)
-        ref = f"refs/agent-groupchat/{chat['id']}/base"
-        base = copies.snapshot(chat["folder"], ref)
+        try:
+            info = new_base(chat)
+        except ValueError as e:
+            raise ValueError(f"Can't start a Race: {e}.")
         who = racers(chat)
         checkers = [b for b in stage_agents(chat, "test")[:1] + stage_agents(chat, "review")
                     if b not in who]
         to = [b for b in agent_ids(chat) if b in who or b in checkers]
         halted.discard(chat["id"])
         idx = add_msg(chat, "user", text, mode="race", to=to, status={b: "queued" for b in to})
-        chat["race"] = {"msg": idx, "stage": "work", "root": root, "sub": sub, "base": base,
-                        "ref": ref, "racers": who, "copies": {}, "pick": None, "used": None}
+        chat["race"] = {"msg": idx, "stage": "work", **info, "racers": who, "copies": {},
+                        "pick": None, "used": None}
+        note_submodules(chat, chat["race"])
         save(chat)
 
 
@@ -1310,7 +1371,7 @@ def ask_copy(chat, bot, folder, prompt, role, stage, users, cap=None):
                                                     "role": RACE_VERB.get(stage, stage)}
     reply, meta = "(stopped)", {}
     try:
-        if chat["id"] not in halted:
+        if chat["id"] not in halted and not chat.get("deleted"):
             reply, meta = run_agent(chat, bot, prompt, level, folder=folder, fresh=True)
     except Exception as e:
         reply = f"(error) {e}"
@@ -1326,8 +1387,14 @@ def ask_copy(chat, bot, folder, prompt, role, stage, users, cap=None):
     return reply, meta
 
 
-def post_copy_reply(chat, r, bot, name, reply, meta):
-    """Commit what was done in copy `name`, post the reply with that copy's files and diff."""
+def diff_counts(text):
+    return [text.count("\n+") - text.count("\n+++"), text.count("\n-") - text.count("\n---")]
+
+
+def post_copy_reply(chat, r, bot, name, reply, meta, markers=False):
+    """Commit what was done in copy `name`, post the reply with that copy's files and diff.
+    markers: check that no conflict markers are left (merges); if some are, the copy can't
+    be used."""
     c = r["copies"][name]
     try:
         copies.save_copy(c["path"], f"{display(chat, bot)}: {meta.get('role', '')}")
@@ -1336,8 +1403,15 @@ def post_copy_reply(chat, r, bot, name, reply, meta):
     except copies.GitError as e:
         c["files"], text = [], ""
         reply += f"\n\n(error saving the copy: {e})"
-    c["diff"] = [text.count("\n+") - text.count("\n+++"), text.count("\n-") - text.count("\n---")]
-    c["status"] = outcome(reply) if outcome(reply) != "done" else ("done" if c["files"] else "empty")
+    left = copies.conflict_markers(c["path"], c["files"]) if markers else []
+    c["diff"] = diff_counts(text)
+    if outcome(reply) != "done":
+        c["status"] = outcome(reply)
+    elif left:
+        c["status"] = "conflicts"
+        c["warn"] = meta["warn"] = "conflict markers are still in: " + ", ".join(left[:5])
+    else:
+        c["status"] = "done" if c["files"] else "empty"
     meta.update(copy=name, files=c["files"], **({"diff": c["diff"]} if text else {}))
     idx = add_msg(chat, bot, reply, meta=meta)
     c["msg"] = idx
@@ -1347,77 +1421,118 @@ def post_copy_reply(chat, r, bot, name, reply, meta):
             f.write(text[:MAX_DIFF])
 
 
+def open_copy(chat, r, name, agent_id, extra=None):
+    """Make (or remake) copy `name` from the snapshot. -> its record, or None if the chat was
+    deleted / the Race replaced meanwhile (then the copy is removed again)."""
+    path, branch = worktree_dir(chat, name), f"agent/{chat['id']}/{name}"
+    c = {"agent": agent_id, "name": display(chat, agent_id), "path": path, "branch": branch,
+         "status": "working", **(extra or {})}
+    with lock:
+        r["copies"][name] = c  # registered first: cleanup knows about it whatever happens
+    try:
+        c["folder"] = copies.make_copy(r["root"], r["base"], path, branch, r["scope"])
+    except copies.GitError as e:
+        c["status"] = "error"
+        add_msg(chat, agent_id, f"(error) couldn't make a copy of the project: {e}",
+                meta={"role": "⚡ Race", "stage": "race", "copy": name})
+        return None
+    if chat.get("deleted") or chat.get("race") is not r:
+        copies.remove_copies(r["root"], [path], [branch])
+        return None
+    return c
+
+
+def run_racer(chat, r, b, context, task):
+    c = open_copy(chat, r, b, b)
+    if not c:
+        return
+    others = names_of(chat, [x for x in r["racers"] if x != b]) or "the others"
+    prompt = ((context + "\n\n") if context else "") + f"[User]: {task}" + \
+        RACE_NOTE.format(others=others, folder=c["folder"])
+    reply, meta = ask_copy(chat, b, c["folder"], prompt, "⚡ Race", "race", [r["msg"]])
+    post_copy_reply(chat, r, b, b, reply, meta)
+
+
 def race_work(chat, r):
     """Every racer does the task in its own copy, all at the same time."""
     context, task = race_context(chat, r), chat["messages"][r["msg"]]["text"]
-
-    def go(b):
-        path = worktree_dir(chat, b)
-        c = {"agent": b, "name": display(chat, b), "path": path, "status": "working",
-             "branch": f"agent/{chat['id']}/{b}"}
-        try:
-            copies.make_copy(r["root"], r["base"], path, c["branch"])
-        except copies.GitError as e:
-            with lock:
-                r["copies"][b] = {**c, "status": "error"}
-            add_msg(chat, b, f"(error) couldn't make a copy of the project: {e}",
-                    meta={"role": "⚡ Race", "stage": "race", "copy": b})
-            return
-        c["folder"] = path if r["sub"] == "." else os.path.join(path, r["sub"])
-        with lock:
-            r["copies"][b] = c
-        others = names_of(chat, [x for x in r["racers"] if x != b]) or "the others"
-        prompt = ((context + "\n\n") if context else "") + f"[User]: {task}" + \
-            RACE_NOTE.format(others=others, folder=c["folder"])
-        reply, meta = ask_copy(chat, b, c["folder"], prompt, "⚡ Race", "race", [r["msg"]])
-        post_copy_reply(chat, r, b, b, reply, meta)
-    ts = [threading.Thread(target=go, args=(b,)) for b in r["racers"]]
+    ts = [threading.Thread(target=run_racer, args=(chat, r, b, context, task)) for b in r["racers"]]
     for t in ts: t.start()
     for t in ts: t.join()
 
 
 def race_test(chat, r):
-    """The (first) Tester runs the tests in every copy that has changes, one after another."""
+    """The (first) Tester runs the tests in every copy that has changes, one after another.
+    Whatever it changes or commits in a copy is undone: the copy stays as its agent left it."""
     testers = [b for b in stage_agents(chat, "test") if b not in r["racers"]][:1]
     task = chat["messages"][r["msg"]]["text"]
     for tester in testers:
         for name, c in list(r["copies"].items()):
-            if c["status"] != "done" or chat["id"] in halted:
+            if c["status"] != "done" or chat["id"] in halted or name.startswith(RESULT):
                 continue
+            before = copies.head(c["path"])
             prompt = f"[User]: {task}" + RACE_TEST_NOTE.format(folder=c["folder"], name=c["name"])
             reply, meta = ask_copy(chat, tester, c["folder"], prompt,
                                    f"Tester · {c['name']}'s copy", "test", [r["msg"]])
             meta["copy"] = name
-            dirty = copies.git(c["path"], "status", "--porcelain", check=False).strip()
-            if dirty:  # the Tester changed the copy: undo it, the copy stays as its agent left it
-                copies.git(c["path"], "reset", "-q", "--hard", "HEAD", check=False)
-                copies.git(c["path"], "clean", "-q", "-fd", check=False)
+            changed = copies.head(c["path"]) != before or \
+                copies.git(c["path"], "status", "--porcelain", check=False).strip()
+            if changed:
+                copies.reset_copy(c["path"], before)
                 meta["warn"] = "the Tester changed files in this copy; they were undone"
                 c["test_warn"] = True
             c["tests"] = first_line(reply)[2:][:160] if outcome(reply) == "done" else reply[:160]
             add_msg(chat, tester, reply, meta=meta)
 
 
+def review_diffs(chat, r, names):
+    budget = REVIEW_BUDGET // max(1, len(names))
+    parts = []
+    for n in names:
+        c = r["copies"][n]
+        text = copies.diff(r["root"], r["base"], c["branch"], binary=False)
+        if len(text) > budget:
+            text = text[:budget] + "\n… (cut: the diff is longer)"
+        parts.append(f"=== {c['name']} (id {n}) · tests: {c.get('tests', 'not run')} ===\n{text}")
+    return "\n\n".join(parts)
+
+
 def race_review(chat, r):
-    """Each Reviewer compares all copies (diffs + test results) and picks one."""
-    done = {n: c for n, c in r["copies"].items() if c["status"] == "done"}
+    """Each Reviewer compares all copies (diffs + test results) and picks one (read-only)."""
+    done = [n for n, c in r["copies"].items() if c["status"] == "done" and not n.startswith(RESULT)]
     if not done:
         return
-    parts = []
-    for n, c in done.items():
-        text = copies.diff(r["root"], r["base"], c["branch"], binary=False)
-        if len(text) > 15_000:
-            text = text[:15_000] + "\n… (cut: the diff is longer)"
-        parts.append(f"=== {c['name']} (id {n}) · tests: {c.get('tests', 'not run')} ===\n{text}")
-    note = RACE_REVIEW_NOTE.format(n=len(done), ids=", ".join(done), copies="\n\n".join(parts))
+    note = RACE_REVIEW_NOTE.format(n=len(done), ids=", ".join(done), copies=review_diffs(chat, r, done))
     for rev in [b for b in stage_agents(chat, "review") if b not in r["racers"]]:
         if chat["id"] in halted:
             return
-        reply = ask(chat, rev, note, role="Reviewer · ⚡ Race", stage="review-race", force=True)
+        reply = ask(chat, rev, note, cap="read", role="Reviewer · ⚡ Race", stage="review-race", force=True)
         picks = PICK_RE.findall(reply or "")
         pick = picks[-1].lower() if picks else None
         if pick in done and not r.get("pick"):
             r["pick"] = pick
+
+
+def merge_into_result(chat, r, names, fixer):
+    """A new result copy with `names` merged in. -> (record, conflicts) or (None, error)."""
+    k = 1 + sum(1 for n in r["copies"] if n.startswith(RESULT))
+    name = RESULT if k == 1 else f"{RESULT}-{k}"
+    label = " + ".join(r["copies"][n]["name"] for n in names)
+    path, branch = worktree_dir(chat, name), f"agent/{chat['id']}/{name}"
+    c = {"agent": fixer, "name": f"Combined ({label})", "path": path, "branch": branch,
+         "status": "working", "from": names, "label": label}
+    with lock:
+        r["copies"][name] = c  # registered before merging: cleanup knows about it
+    try:
+        conflicts = copies.merge_copies(r["root"], r["base"], [r["copies"][n]["branch"] for n in names],
+                                        path, branch, r["scope"])
+    except copies.GitError as e:
+        c["status"] = "error"
+        add_msg(chat, "system", f"Couldn't merge {label}: {e}")
+        return None, str(e)
+    c["folder"] = path if r["scope"] == "." else os.path.join(path, *r["scope"].split("/"))
+    c["key"] = name
+    return c, conflicts
 
 
 def race_combine(chat, r):
@@ -1425,34 +1540,49 @@ def race_combine(chat, r):
     names = r.pop("combine", None)
     if not names:  # (already being combined)
         return
-    k = 1 + sum(1 for n in r["copies"] if n.startswith("combined"))
-    name = "combined" if k == 1 else f"combined-{k}"
     fixer = next((b for b in r["racers"] if has_role(chat, b, "lead")), r["racers"][0])
-    path, branch = worktree_dir(chat, name), f"agent/{chat['id']}/{name}"
-    conflicts = copies.merge_copies(r["root"], r["base"], [r["copies"][n]["branch"] for n in names],
-                                    path, branch)
-    folder = path if r["sub"] == "." else os.path.join(path, r["sub"])
-    label = " + ".join(r["copies"][n]["name"] for n in names)
-    with lock:
-        r["copies"][name] = {"agent": fixer, "name": f"Combined ({label})", "path": path,
-                             "folder": folder, "branch": branch, "status": "working", "from": names}
+    c, conflicts = merge_into_result(chat, r, names, fixer)
+    if not c:
+        return
     task = chat["messages"][r["msg"]]["text"]
     prompt = f"[User]: {task}" + COMBINE_NOTE.format(
-        names=label, folder=folder,
+        names=c["label"], folder=c["folder"],
         conflicts=f"; these files still have conflict markers: {', '.join(conflicts)}"
         if conflicts else " without conflicts")
-    reply, meta = ask_copy(chat, fixer, folder, prompt, "⚡ Combine", "combine", [])
-    post_copy_reply(chat, r, fixer, name, reply, meta)
+    reply, meta = ask_copy(chat, fixer, c["folder"], prompt, "⚡ Combine", "combine", [])
+    post_copy_reply(chat, r, fixer, c["key"], reply, meta, markers=True)
+
+
+def race_retry(chat, r):
+    """Run one failed racer / Split part again, in its own copy (never in the user's folder)."""
+    name = r.pop("retry", None)
+    c = r["copies"].get(name) if name else None
+    if not c:
+        return
+    context, task = race_context(chat, r), chat["messages"][r["msg"]]["text"]
+    b = c["agent"]
+    if r.get("kind") == "split":
+        run_part(chat, r, b, context, task)
+        for n in [n for n in r["copies"] if n.startswith(RESULT)]:  # merge again from scratch
+            old = r["copies"].pop(n)
+            copies.remove_copies(r["root"], [old["path"]], [old["branch"]])
+    else:
+        run_racer(chat, r, b, context, task)
+        r["pick"] = None
 
 
 def step_race(chat):
-    """Run the next stage of the Race. -> True if it did something (call again)."""
+    """Run the next stage of the Race or Split. -> True if it did something (call again)."""
     r = chat.get("race")
-    if not r or r["stage"] in ("done", "stopped", "await"):
+    if not r or r["stage"] not in RUNNING:
         return False
     stage = r["stage"]
     try:
-        if r.get("kind") == "split":
+        if stage == "retry":
+            race_retry(chat, r)
+            r["stage"] = ("merge" if all_parts_ok(chat, r) else "stopped") if r.get("kind") == "split" \
+                else "test"
+        elif r.get("kind") == "split":
             step_split(chat, r)
         elif stage == "work":
             race_work(chat, r)
@@ -1467,7 +1597,7 @@ def step_race(chat):
             race_combine(chat, r)
             r["stage"] = "done"
     except (copies.GitError, OSError) as e:
-        add_msg(chat, "system", f"⚡ The Race stopped: {e}")
+        add_msg(chat, "system", f"The {'Split' if r.get('kind') == 'split' else 'Race'} stopped: {e}")
         r["stage"] = "stopped"
     r = chat.get("race")  # (a Split that ran normally after all has no race any more)
     if r and chat["id"] in halted and r["stage"] != "done":
@@ -1478,43 +1608,54 @@ def step_race(chat):
 
 
 def race_action(chat, d):
-    """The compare view's buttons: use / combine / discard. -> (code, response)."""
-    r, action = chat.get("race"), d.get("action")
-    if not r:
-        return 409, {"error": "There's no Race in this chat."}
-    if chat["id"] in workers:
-        return 409, {"error": "Wait until the agents have finished."}
-    if action == "use":
-        c = r["copies"].get(d.get("copy"))
-        if not c or c["status"] != "done":
-            return 400, {"error": "That copy has no finished changes."}
-        ok, files = copies.use_copy(r["root"], r["base"], c["branch"])
-        if not ok:
-            return 409, {"error": "These files changed in your folder since the Race started, so "
-                                  "nothing was copied: " + ", ".join(files)
-                                  + ". Commit or undo your changes there, or Combine instead.",
-                         "clash": files}
-        with lock:
+    """The compare view's buttons: use / combine / discard. -> (code, response).
+    Checks and state changes happen under the lock, so a double click can't do things twice."""
+    with lock:
+        r, action = chat.get("race"), d.get("action")
+        if not r:
+            return 409, {"error": "There's no Race or Split in this chat."}
+        busy = chat["id"] in workers or r["stage"] in RUNNING
+        if action == "discard" and split_waiting(chat):
+            cancel_split(chat)
+            return 200, {"ok": True, "problems": []}
+        if action == "discard":
+            if busy:
+                return 409, {"error": "Wait until the agents have finished (or press Stop)."}
+            problems = discard_race(chat)
+            add_msg(chat, "system", "The copies were discarded." + (
+                " Some couldn't be removed: " + "; ".join(problems) if problems else ""))
+            return 200, {"ok": True, "problems": problems}
+        if busy:
+            return 409, {"error": "Wait until the agents have finished."}
+        if action == "use":
+            c = r["copies"].get(d.get("copy"))
+            if not c or c["status"] != "done":
+                return 400, {"error": "That copy has no finished changes."}
+            ok, files, why = copies.use_copy(r["root"], r["base"], c["branch"], r["scope"])
+            if not ok:
+                if why == "outside":
+                    return 409, {"error": "This copy changed files outside the chat's folder, so "
+                                          "nothing was copied: " + ", ".join(files[:10]), "clash": files}
+                return 409, {"error": "You changed the same lines in these files since it started, "
+                                      "so nothing was copied: " + ", ".join(files)
+                                      + ". Commit or undo your changes there first.", "clash": files}
             r["used"] = d["copy"]
             whose = f"the {c['name'][0].lower()}{c['name'][1:]} copy" if c.get("from") else f"{c['name']}'s copy"
             add_msg(chat, "system", f"You used {whose}: its changes are now in your folder "
                                     f"(not committed): {', '.join(files) or 'no files'}.")
-        return 200, {"ok": True, "files": files}
-    if action == "combine":
-        names = d.get("copies")
-        if not isinstance(names, list) or len(set(names)) < 2 or any(
-                r["copies"].get(n, {}).get("status") != "done" for n in names):
-            return 400, {"error": "Pick 2 or more finished copies to combine."}
-        with lock:
+            return 200, {"ok": True, "files": files}
+        if action == "combine":
+            if r.get("kind") == "split":
+                return 400, {"error": "Combine is for a Race; a Split combines its parts by itself."}
+            names = d.get("copies")
+            if not isinstance(names, list) or len(set(names)) < 2 or any(
+                    r["copies"].get(n, {}).get("status") != "done" for n in names):
+                return 400, {"error": "Pick 2 or more finished copies to combine."}
             r["combine"], r["stage"] = list(dict.fromkeys(names)), "combine"
             halted.discard(chat["id"])
             save(chat)
+    if action == "combine":
         kick(chat)
-        return 200, {"ok": True}
-    if action == "discard":
-        with lock:
-            discard_race(chat)
-            add_msg(chat, "system", "The Race's copies were discarded.")
         return 200, {"ok": True}
     return 400, {"error": f"Unknown action: {action}"}
 
@@ -1527,9 +1668,9 @@ def race_action(chat, d):
 SPLIT_PLAN_NOTE = ("\n\n(🧩 Split · Planner: the user wants the latest request split into parts that agents "
                    "build at the same time, each in its own copy of the project. Agents who can take a "
                    "part: {who}. Split it into independent parts: no part may need another part to be "
-                   "finished first. At most one part per agent; not every agent needs one. Explain the "
-                   "split briefly, then list the parts at the end, one per line, exactly like:\n"
-                   "PART @{ex}: <what this agent builds, with file names>\n"
+                   "finished first. At most one part per agent; not every agent needs one. Don't change "
+                   "any files. Explain the split briefly, then list the parts at the end, one per line, "
+                   "exactly like:\nPART @{ex}: <what this agent builds, with file names>\n"
                    "If the task can't be split into independent parts, say why and end with the line: "
                    "NO SPLIT)")
 SPLIT_PART_NOTE = ("\n\n(🧩 Split: the task above was divided into parts that are built at the same time, each "
@@ -1567,6 +1708,10 @@ def split_check(chat, by_planner=False):
     return ""
 
 
+def checkers_of(chat, builders):
+    return [b for b in stage_agents(chat, "test")[:1] + stage_agents(chat, "review") if b not in builders]
+
+
 def start_split(chat, text, parts=None):
     """🧩 Split. parts: {agent id: its part} (the user's own split), or None (the Planner splits)."""
     who = racers(chat)
@@ -1579,25 +1724,25 @@ def start_split(chat, text, parts=None):
             raise ValueError(f"These agents can't take a part (they can't edit files): {', '.join(bad)}")
         if len(parts) < 2:
             raise ValueError("Give at least 2 agents a part (or use a normal message).")
-    why = split_check(chat, by_planner=parts is None)
-    if why:
-        raise ValueError(f"Can't start a Split: {why}.")
-    planner = None if parts else next(b for b in agent_ids(chat) if has_role(chat, b, "planner"))
     with lock:
+        why = split_check(chat, by_planner=parts is None)
+        if why:
+            raise ValueError(f"Can't start a Split: {why}.")
+        planner = None if parts else next(b for b in agent_ids(chat) if has_role(chat, b, "planner"))
         discard_race(chat)
-        root = copies.repo_root(chat["folder"])
-        sub = os.path.relpath(os.path.realpath(chat["folder"]), root)
-        ref = f"refs/agent-groupchat/{chat['id']}/base"
-        base = copies.snapshot(chat["folder"], ref)
-        checkers = [b for b in stage_agents(chat, "test")[:1] + stage_agents(chat, "review") if b not in who]
+        try:
+            info = new_base(chat)
+        except ValueError as e:
+            raise ValueError(f"Can't start a Split: {e}.")
         builders = list(parts) if parts else who
-        to = [b for b in agent_ids(chat) if b in builders or b in checkers or b == planner]
+        to = [b for b in agent_ids(chat) if b in builders or b in checkers_of(chat, builders) or b == planner]
         halted.discard(chat["id"])
         idx = add_msg(chat, "user", text, mode="split", to=to,
                       status={b: "waiting" if planner and b != planner else "queued" for b in to})
         chat["race"] = {"kind": "split", "msg": idx, "stage": "plan" if planner else "parts",
-                        "planner": planner, "parts": parts or {}, "root": root, "sub": sub, "base": base,
-                        "ref": ref, "racers": builders, "copies": {}, "pick": None, "used": None, "fix": 0}
+                        "planner": planner, "parts": parts or {}, **info, "racers": builders,
+                        "copies": {}, "pick": None, "used": None, "fix": 0}
+        note_submodules(chat, chat["race"])
         save(chat)
 
 
@@ -1611,27 +1756,42 @@ def split_feedback(chat, text):
         save(chat)
 
 
-def split_go(chat):
-    """The user OK'd the Planner's parts."""
+def split_waiting(chat):
     r = chat.get("race")
-    if not r or r.get("kind") != "split" or r["stage"] != "await":
-        return False
+    return bool(r and r.get("kind") == "split" and r["stage"] == "await")
+
+
+def split_go(chat):
+    """The user OK'd the Planner's parts (atomic: a second Go finds nothing waiting)."""
     with lock:
+        if not split_waiting(chat):
+            return False
+        r = chat["race"]
         r["stage"] = "parts"
-        for b in r["racers"]:
-            set_status(chat, [r["msg"]], b, "queued", only=("waiting",))
-        for b in [x for x in stage_agents(chat, "test")[:1] + stage_agents(chat, "review")]:
+        for b in r["racers"] + checkers_of(chat, r["racers"]):
             set_status(chat, [r["msg"]], b, "queued", only=("waiting",))
         save(chat)
     return True
 
 
+def cancel_split(chat):
+    """Stop / Discard while the parts wait for the OK."""
+    with lock:
+        r = chat["race"]
+        m = chat["messages"][r["msg"]]
+        for b, st in (m.get("status") or {}).items():
+            if st in ("waiting", "queued"):
+                m["status"][b] = "skipped"
+        discard_race(chat)
+        add_msg(chat, "system", "The Split was cancelled.")
+
+
 def split_plan(chat, r):
-    """The Planner proposes the parts; then wait for the OK (or run normally if it can't split)."""
+    """The Planner proposes the parts (read-only); then wait for the OK, or run normally."""
     who = racers(chat)
-    note = SPLIT_PLAN_NOTE.format(who=", ".join(f"{display(chat, b)} (@{b})" for b in who),
-                                  ex=who[0])
-    reply = ask(chat, r["planner"], note, role="Planner · 🧩 Split", stage="plan-split", force=True) or ""
+    note = SPLIT_PLAN_NOTE.format(who=", ".join(f"{display(chat, b)} (@{b})" for b in who), ex=who[0])
+    reply = ask(chat, r["planner"], note, cap="read", role="Planner · 🧩 Split", stage="plan-split",
+                force=True) or ""
     if outcome(reply) != "done":
         r["stage"] = "stopped"
         return
@@ -1642,52 +1802,65 @@ def split_plan(chat, r):
             parts[b] = text
     if NO_SPLIT_RE.search(reply) or len(parts) < 2:
         run_normally(chat, r, "The Planner didn't split this task into 2 or more independent parts, "
-                              "so it runs as a normal message.")
+                              "so the Lead does it as a normal message.")
         return
     r["parts"], r["racers"], r["stage"] = parts, list(parts), "await"
     m = chat["messages"][r["msg"]]
+    keep = set(parts) | {r["planner"]} | set(checkers_of(chat, list(parts)))
     for b in list(m.get("status") or {}):  # agents without a part have nothing to do
-        if b not in parts and b != r["planner"] and m["status"][b] == "waiting" and \
-                b not in stage_agents(chat, "test") + stage_agents(chat, "review"):
+        if b not in keep and m["status"][b] == "waiting":
             m["status"][b] = "skipped"
 
 
 def run_normally(chat, r, why):
-    """Fall back: the Split message becomes a normal message (the flow or direct answers)."""
+    """NO SPLIT: one agent does the task the normal way: the Lead (with the usual Tester and
+    Reviewer after it), or the first agent that can edit if there's no Lead."""
     m = chat["messages"][r["msg"]]
+    lead = next((b for b in agent_ids(chat) if has_role(chat, b, "lead")), None)
     with lock:
-        m.pop("mode", None)
-        m["status"] = {b: st for b, st in (m.get("status") or {}).items() if b == r.get("planner")}
-        want, flow = route(chat, m)
-        to = [b for b in agent_ids(chat) if b in want or (flow and b in flow_agents(chat))]
-        m["to"] = list(dict.fromkeys([*m["status"], *to]))
+        status = {b: st for b, st in (m.get("status") or {}).items() if b == r.get("planner")}
+        m["mode"] = "no-split"
+        if lead and has_flow(chat):
+            m["flow"] = True
+            stages = [s for s in flow_stages(chat) if s not in ("plan", "await")]
+            chat["flow"] = {"msg": r["msg"], "stages": stages, "i": 0, "fix": 0, "waiting": False}
+            to = [b for b in agent_ids(chat) if b == lead or (b in checkers_of(chat, [lead]))]
+        else:
+            m["only"] = lead or racers(chat)[0]
+            to = [m["only"]]
         for b in to:
-            m["status"].setdefault(b, "queued")
-        if flow:
-            chat["flow"] = {"msg": r["msg"], "stages": [s for s in flow_stages(chat) if s not in ("plan", "await")],
-                            "i": 0, "fix": 0, "waiting": False}
+            status.setdefault(b, "queued")
+        m["status"], m["to"] = status, list(status)
         add_msg(chat, "system", why)
         discard_race(chat)
+
+
+def run_part(chat, r, b, context, task):
+    c = open_copy(chat, r, b, b, {"part": r["parts"][b]})
+    if not c:
+        return
+    others = "; ".join(f"{display(chat, x)}: {t}" for x, t in r["parts"].items() if x != b) or "none"
+    prompt = ((context + "\n\n") if context else "") + f"[User]: {task}" + \
+        SPLIT_PART_NOTE.format(part=r["parts"][b], others=others, folder=c["folder"])
+    reply, meta = ask_copy(chat, b, c["folder"], prompt, "🧩 Part", "part", [r["msg"]])
+    post_copy_reply(chat, r, b, b, reply, meta)
+
+
+def all_parts_ok(chat, r):
+    """Every part finished (or had nothing to change)? Otherwise say which failed and stop:
+    a result with a part missing must not look ready."""
+    failed = [c["name"] for n, c in r["copies"].items()
+              if not n.startswith(RESULT) and c["status"] not in ("done", "empty")]
+    if failed:
+        add_msg(chat, "system", f"🧩 {', '.join(failed)}'s part didn't finish, so the parts weren't merged. "
+                                "Press Retry under that reply, or Discard.")
+    return not failed
 
 
 def split_parts(chat, r):
     """Every agent with a part builds it in its own copy, all at the same time."""
     context, task = race_context(chat, r), chat["messages"][r["msg"]]["text"]
-
-    def go(b):
-        path = worktree_dir(chat, b)
-        c = {"agent": b, "name": display(chat, b), "path": path, "status": "working",
-             "branch": f"agent/{chat['id']}/{b}", "part": r["parts"][b]}
-        copies.make_copy(r["root"], r["base"], path, c["branch"])
-        c["folder"] = path if r["sub"] == "." else os.path.join(path, r["sub"])
-        with lock:
-            r["copies"][b] = c
-        others = "; ".join(f"{display(chat, x)}: {t}" for x, t in r["parts"].items() if x != b) or "none"
-        prompt = ((context + "\n\n") if context else "") + f"[User]: {task}" + \
-            SPLIT_PART_NOTE.format(part=r["parts"][b], others=others, folder=c["folder"])
-        reply, meta = ask_copy(chat, b, c["folder"], prompt, "🧩 Part", "part", [r["msg"]])
-        post_copy_reply(chat, r, b, b, reply, meta)
-    ts = [threading.Thread(target=go, args=(b,)) for b in r["parts"]]
+    ts = [threading.Thread(target=run_part, args=(chat, r, b, context, task)) for b in r["parts"]]
     for t in ts: t.start()
     for t in ts: t.join()
 
@@ -1697,73 +1870,68 @@ def split_fixer(chat, r):
 
 
 def split_merge(chat, r):
-    """Merge the finished parts into one combined copy; the Lead fixes clashes."""
-    done = [n for n, c in r["copies"].items() if c["status"] == "done"]
+    """Merge the finished parts into one result copy; the Lead fixes clashes.
+    -> the next stage."""
+    done = [n for n, c in r["copies"].items() if c["status"] == "done" and not n.startswith(RESULT)]
     if not done:
         add_msg(chat, "system", "🧩 No part changed any files, so there's nothing to merge.")
-        r["stage"] = "stopped"
-        return
-    path, branch = worktree_dir(chat, "combined"), f"agent/{chat['id']}/combined"
-    conflicts = copies.merge_copies(r["root"], r["base"], [r["copies"][n]["branch"] for n in done],
-                                    path, branch)
-    folder = path if r["sub"] == "." else os.path.join(path, r["sub"])
-    fixer = split_fixer(chat, r)
-    label = " + ".join(r["copies"][n]["name"] for n in done)
-    with lock:
-        r["copies"]["combined"] = {"agent": fixer, "name": f"Combined ({label})", "path": path,
-                                   "folder": folder, "branch": branch, "status": "working", "from": done}
+        return "stopped"
+    c, conflicts = merge_into_result(chat, r, done, split_fixer(chat, r))
+    if not c:
+        return "stopped"
     if conflicts:
         prompt = f"[User]: {chat['messages'][r['msg']]['text']}" + SPLIT_MERGE_NOTE.format(
-            parts=label, folder=folder, conflicts=", ".join(conflicts))
-        reply, meta = ask_copy(chat, fixer, folder, prompt, "🧩 Merge", "combine", [])
-        post_copy_reply(chat, r, fixer, "combined", reply, meta)
+            parts=c["label"], folder=c["folder"], conflicts=", ".join(conflicts))
+        reply, meta = ask_copy(chat, c["agent"], c["folder"], prompt, "🧩 Merge", "combine", [])
+        post_copy_reply(chat, r, c["agent"], c["key"], reply, meta, markers=True)
+        if c["status"] != "done":
+            add_msg(chat, "system", "🧩 The merged result isn't usable yet: " +
+                    (c.get("warn") or f"the merge fix {c['status']}") + ".")
+            return "stopped"
     else:
-        c = r["copies"]["combined"]
-        c["files"] = copies.changed_files(r["root"], r["base"], branch)
-        text = copies.diff(r["root"], r["base"], branch, binary=False)
-        c["diff"] = [text.count("\n+") - text.count("\n+++"), text.count("\n-") - text.count("\n---")]
+        c["files"] = copies.changed_files(r["root"], r["base"], c["branch"])
+        c["diff"] = diff_counts(copies.diff(r["root"], r["base"], c["branch"], binary=False))
         c["status"] = "done"
-        add_msg(chat, "system", f"🧩 The parts ({label}) merged without clashes.")
+        add_msg(chat, "system", f"🧩 The parts ({c['label']}) merged without clashes.")
+    r["result"] = c["key"]
+    return "check"
 
 
 def split_check_result(chat, r):
-    """Tester + Reviewer check the combined copy; FIX verdicts -> fix rounds (chat setting)."""
-    c = r["copies"].get("combined")
+    """Tester + Reviewer check the result copy; FIX verdicts -> fix rounds (chat setting)."""
+    c = r["copies"].get(r.get("result"))
     if not c or c["status"] != "done":
         return "stopped"
     task = chat["messages"][r["msg"]]["text"]
-    verdicts, findings, tests = [], [], "not run"
+    findings, tests = [], "not run"
     for tester in [b for b in stage_agents(chat, "test") if b not in r["parts"]][:1]:
-        before = copies.git(c["path"], "rev-parse", "HEAD").strip()
+        before = copies.head(c["path"])
         reply, meta = ask_copy(chat, tester, c["folder"], f"[User]: {task}" +
                                SPLIT_TEST_NOTE.format(folder=c["folder"]), "Tester · 🧩 Split", "test", [r["msg"]])
         copies.save_copy(c["path"], "tests")
-        changed = [f for f in copies.git(c["path"], "diff", "--name-only", before, "HEAD").splitlines() if f]
+        changed = [p for _, p in copies.name_status(c["path"], before, "HEAD")]
         other = [f for f in changed if not is_test_file(f)]
         if other:
             meta["warn"] = "the Tester changed non-test files: " + ", ".join(other[:5])
         v = verdict(reply)
         if v:
             meta["verdict"] = v
-        meta["copy"] = "combined"
+        meta["copy"] = r["result"]
         add_msg(chat, tester, reply, meta=meta)
         tests = first_line(reply)[2:][:160] if outcome(reply) == "done" else reply[:160]
         c["tests"] = tests
-        verdicts.append(v)
         if v == "FIX":
             findings.append(f"[{display(chat, tester)}, tester]: {reply}")
-    text = copies.diff(r["root"], r["base"], c["branch"], binary=False)
-    if len(text) > 30_000:
-        text = text[:30_000] + "\n… (cut: the diff is longer)"
     c["files"] = copies.changed_files(r["root"], r["base"], c["branch"])
-    c["diff"] = [text.count("\n+") - text.count("\n+++"), text.count("\n-") - text.count("\n---")]
+    c["diff"] = diff_counts(copies.diff(r["root"], r["base"], c["branch"], binary=False))
+    text = copies.diff(r["root"], r["base"], c["branch"], binary=False)
+    if len(text) > REVIEW_BUDGET:
+        text = text[:REVIEW_BUDGET] + "\n… (cut: the diff is longer)"
     note = SPLIT_REVIEW_NOTE.format(parts=", ".join(display(chat, b) for b in r["parts"]),
                                     tests=tests, diff=text)
     for rev in [b for b in stage_agents(chat, "review") if b not in r["parts"]]:
-        reply = ask(chat, rev, note, role="Reviewer · 🧩 Split", stage="review", force=True) or ""
-        v = verdict(reply)
-        verdicts.append(v)
-        if v == "FIX":
+        reply = ask(chat, rev, note, cap="read", role="Reviewer · 🧩 Split", stage="review", force=True) or ""
+        if verdict(reply) == "FIX":
             findings.append(f"[{display(chat, rev)}, reviewer]: {reply}")
     if findings and r["fix"] < chat.get("fix_rounds", 1):
         r["findings"] = "\n\n".join(findings)
@@ -1772,14 +1940,18 @@ def split_check_result(chat, r):
 
 
 def split_fix(chat, r):
-    """One fix round in the combined copy, then check again."""
+    """One fix round in the result copy. -> the next stage."""
     r["fix"] += 1
-    c = r["copies"]["combined"]
-    fixer = split_fixer(chat, r)
+    c = r["copies"][r["result"]]
     prompt = f"[User]: {chat['messages'][r['msg']]['text']}" + SPLIT_FIX_NOTE.format(
         k=r["fix"], n=chat.get("fix_rounds", 1), folder=c["folder"], findings=r.pop("findings", ""))
-    reply, meta = ask_copy(chat, fixer, c["folder"], prompt, f"🧩 Fix round {r['fix']}", "combine", [])
-    post_copy_reply(chat, r, fixer, "combined", reply, meta)
+    reply, meta = ask_copy(chat, c["agent"], c["folder"], prompt, f"🧩 Fix round {r['fix']}", "combine", [])
+    post_copy_reply(chat, r, c["agent"], r["result"], reply, meta, markers=True)
+    if c["status"] != "done":
+        add_msg(chat, "system", "🧩 The fix round left the result unusable: " +
+                (c.get("warn") or f"it {c['status']}") + ".")
+        return "stopped"
+    return "check"
 
 
 def step_split(chat, r):
@@ -1788,16 +1960,13 @@ def step_split(chat, r):
         split_plan(chat, r)
     elif stage == "parts":
         split_parts(chat, r)
-        r["stage"] = "merge"
+        r["stage"] = "merge" if all_parts_ok(chat, r) else "stopped"
     elif stage == "merge":
-        split_merge(chat, r)
-        if r["stage"] == "merge":
-            r["stage"] = "check"
+        r["stage"] = split_merge(chat, r)
     elif stage == "check":
         r["stage"] = split_check_result(chat, r)
     elif stage == "fix":
-        split_fix(chat, r)
-        r["stage"] = "check"
+        r["stage"] = split_fix(chat, r)
 
 
 def set_agents(chat, specs):
@@ -1854,6 +2023,7 @@ def handoffs(chat, skip):
 def worker(chat, first=None):
     """Processes a chat until there is nothing new to answer. `first`: a task to run
     before that (Retry, Compact)."""
+    me = threading.current_thread()
     try:
         if first:
             first()
@@ -1883,10 +2053,29 @@ def worker(chat, first=None):
                 continue
             if step_flow(chat):
                 continue
-            return
+            with lock:  # check and leave together: work that arrives now is seen, or kick() starts a new worker
+                if has_work(chat):
+                    continue
+                if workers.get(chat["id"]) is me:
+                    workers.pop(chat["id"])
+                return
     finally:
         with lock:
-            workers.pop(chat["id"], None)
+            if workers.get(chat["id"]) is me:
+                workers.pop(chat["id"], None)
+
+
+def has_work(chat):
+    """Is there anything for the worker to do (a reply owed, a Race/Split or flow stage)?"""
+    if chat["id"] in halted:
+        return False
+    if pending(chat)[0]:
+        return True
+    r = chat.get("race")
+    if r and r["stage"] in RUNNING:
+        return True
+    f = chat.get("flow")
+    return bool(f and not f.get("waiting"))
 
 
 def kick(chat, first=None):
@@ -1899,11 +2088,35 @@ def kick(chat, first=None):
         return True
 
 
+def retry_block(chat, idx):
+    """'' if the failed reply `idx` can be retried, else why not."""
+    meta = chat["messages"][idx].get("meta") or {}
+    if not meta.get("copy"):
+        return ""
+    r = chat.get("race")
+    if not r or meta["copy"] not in r["copies"]:
+        return "this Race/Split's copies are gone; start a new one"
+    if meta.get("stage") not in ("race", "part"):
+        return "start a new Race/Split for this (only a racer's or a part's reply can be retried)"
+    if r["stage"] in RUNNING or chat["id"] in workers:
+        return "wait until the agents have finished"
+    return ""
+
+
 def retry(chat, idx):
     """Ask the same agent again for a reply that failed (error / stopped / timed out).
-    A failed workflow step continues the workflow from that step."""
+    A failed workflow step continues the workflow from that step; a failed racer or Split part
+    runs again in its own copy."""
     m = chat["messages"][idx]
     bot, meta = m["who"], m.get("meta") or {}
+    if meta.get("copy"):
+        with lock:
+            m["retried"] = True
+            r = chat["race"]
+            r["retry"], r["stage"] = meta["copy"], "retry"
+            set_status(chat, [r["msg"]], bot, "queued")
+            save(chat)
+        return
     users = meta.get("for") or []
     with lock:
         m["retried"] = True
@@ -2177,8 +2390,7 @@ class Handler(BaseHTTPRequestHandler):
                     start_split(c, text, d.get("parts") if d.get("split") == "own" else None)
                 except (ValueError, copies.GitError) as e:
                     return self.send_json({"error": str(e)}, 400)
-            elif r and r.get("kind") == "split" and r["stage"] == "await" and not sk \
-                    and not mentioned(c, text):
+            elif split_waiting(c) and not sk and mentioned(c, text) in ([], [r["planner"]]):
                 split_feedback(c, text)  # a reply to the Planner's parts: it revises them
             else:
                 post_user_message(c, text, sk)
@@ -2194,6 +2406,9 @@ class Handler(BaseHTTPRequestHandler):
                         or c["messages"][i]["who"] not in agent_ids(c) \
                         or outcome(c["messages"][i]["text"]) == "done":
                     return self.send_json({"error": "nothing to retry"}, 400)
+                why = retry_block(c, i)
+                if why:
+                    return self.send_json({"error": f"Can't retry this: {why}."}, 400)
                 kick(c, lambda: retry(c, i))
             else:
                 kick(c, lambda: compact(c))
@@ -2218,6 +2433,9 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as e:
                 return self.send_json({"error": str(e)}, 400)
         elif action == "stop":
+            if split_waiting(c):  # nothing runs yet: cancel the Split
+                cancel_split(c)
+                return self.send_json({"ok": True})
             with lock:  # kill running agents and cancel the rest of this turn
                 end_flow(c, "stopped")
                 if c["id"] in workers:

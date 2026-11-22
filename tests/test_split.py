@@ -51,14 +51,14 @@ class PlannerSplit(SplitTest):
         self.assertTrue(srv.split_go(c))
         srv.worker(c)
         self.assertEqual(r["stage"], "done")
-        comb = r["copies"]["combined"]
+        comb = r["copies"]["_combined"]
         self.assertEqual(sorted(comb["files"]), ["api.py", "page.html", "tests/test_api.py"])
         self.assertFalse(os.path.exists(os.path.join(self.folder, "api.py")))  # untouched until used
         self.assertEqual(comb["tests"], "2/2 pass")
         part = self.prompts("YOUR part: build api.py")[0]
         self.assertIn("The other parts (don't do them): Codex: build page.html", part)
         self.assertIn("(🧩 Split · Reviewer", self.prompts("(🧩 Split · Reviewer")[0])
-        self.assertEqual(srv.race_action(c, {"action": "use", "copy": "combined"})[0], 200)
+        self.assertEqual(srv.race_action(c, {"action": "use", "copy": "_combined"})[0], 200)
         for f in ("api.py", "page.html", os.path.join("tests", "test_api.py")):
             self.assertTrue(os.path.exists(os.path.join(self.folder, f)), f)
 
@@ -75,7 +75,7 @@ class PlannerSplit(SplitTest):
                    *RULES[1:])
         c, r = self.split()
         self.assertIsNone(c["race"])
-        self.assertNotIn("mode", c["messages"][0])
+        self.assertEqual(c["messages"][0]["mode"], "no-split")
         self.assertTrue(any(m["who"] == "system" and "normal message" in m["text"] for m in c["messages"]))
         self.assertEqual(len(self.prompts("(Workflow · Lead")), 1)  # the Lead did it the normal way
         self.assertEqual(self.prompts("YOUR part"), [])
@@ -86,8 +86,8 @@ class OwnSplit(SplitTest):
         c, r = self.split(parts=OWN)
         self.assertEqual(self.prompts("(🧩 Split · Planner"), [])
         self.assertEqual(r["stage"], "done")
-        self.assertEqual(sorted(r["copies"]), ["claude-2", "codex", "combined"])
-        self.assertIn("2/2 pass", r["copies"]["combined"]["tests"])
+        self.assertEqual(sorted(r["copies"]), ["_combined", "claude-2", "codex"])
+        self.assertIn("2/2 pass", r["copies"]["_combined"]["tests"])
 
     def test_validation(self):
         c = self.chat(agents=TEAM)
@@ -111,7 +111,7 @@ class OwnSplit(SplitTest):
         self.assertIn("conflict markers: app.py", fixer["argv"][-1])
         intro = fixer["argv"][fixer["argv"].index("--append-system-prompt") + 1]
         self.assertIn("You are Claude 2", intro)  # the Lead
-        self.assertEqual(self.read(r["copies"]["combined"]["folder"], "app.py"), "merged\n")
+        self.assertEqual(self.read(r["copies"]["_combined"]["folder"], "app.py"), "merged\n")
         self.assertEqual(r["stage"], "done")
 
     def test_fix_rounds_on_the_combined_result(self):
@@ -124,7 +124,7 @@ class OwnSplit(SplitTest):
         self.assertIn("api.py is wrong", self.prompts("(🧩 Split · fix round")[0])
         self.assertEqual(len(self.prompts("(🧩 Split · Reviewer")), 2)  # checked again after the fix
         self.assertEqual((r["stage"], r["fix"]), ("done", 1))
-        self.assertEqual(self.read(r["copies"]["combined"]["folder"], "api.py"), "fixed api\n")
+        self.assertEqual(self.read(r["copies"]["_combined"]["folder"], "api.py"), "fixed api\n")
 
     def test_tester_changing_code_is_flagged(self):
         self.rules({"if": "(🧩 Split · Tester", "write": {"api.py": "hacked\n"}, "reply": "1/1\nVERDICT: LGTM"},

@@ -62,6 +62,13 @@ for path, text in writes.items():
         f.write(text)
 
 
+if rule.get("commit"):  # like an agent that commits its own changes (git add -A + commit)
+    import subprocess
+    subprocess.run(["git", "add", "-A"], capture_output=True)
+    subprocess.run(["git", "-c", "user.name=fake", "-c", "user.email=fake@x", "commit", "-qm", "fake"],
+                   capture_output=True)
+
+
 def emit(ev):
     print(json.dumps(ev), flush=True)
 

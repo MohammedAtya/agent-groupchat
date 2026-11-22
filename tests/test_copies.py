@@ -103,7 +103,7 @@ class UseCopy(Repo):
         self.assertTrue(cp.save_copy(path))
         self.assertEqual(cp.changed_files(self.root, base, branch), ["app.py", "tests/test_app.py"])
         self.assertIn("+    return 'HI'", cp.diff(self.root, base, branch))
-        ok, files = cp.use_copy(self.root, base, branch)
+        ok, files, why = cp.use_copy(self.root, base, branch)
         self.assertTrue(ok)
         self.assertIn("'HI'", read(self.p("app.py")))
         self.assertTrue(os.path.exists(self.p("tests", "test_app.py")))
@@ -113,7 +113,7 @@ class UseCopy(Repo):
     def test_nothing_changed(self):
         base, c = self.race("a")
         self.assertFalse(cp.save_copy(c["a"][0]))
-        self.assertEqual(cp.use_copy(self.root, base, c["a"][1]), (True, []))
+        self.assertEqual(cp.use_copy(self.root, base, c["a"][1]), (True, [], ""))
 
     def test_clash_with_the_users_own_later_change_is_refused(self):
         base, c = self.race("codex")
@@ -121,8 +121,8 @@ class UseCopy(Repo):
         write(os.path.join(path, "app.py"), "def greet():\n    return 'from codex'\n")
         cp.save_copy(path)
         write(self.p("app.py"), "def greet():\n    return 'mine'\n")  # the user edits meanwhile
-        ok, clash = cp.use_copy(self.root, base, branch)
-        self.assertEqual((ok, clash), (False, ["app.py"]))
+        ok, clash, why = cp.use_copy(self.root, base, branch)
+        self.assertEqual((ok, clash, why), (False, ["app.py"], "clash"))
         self.assertIn("'mine'", read(self.p("app.py")))  # nothing overwritten
 
     def test_a_new_file_in_the_snapshot_is_no_false_clash(self):
@@ -131,7 +131,7 @@ class UseCopy(Repo):
         path, branch = c["a"]
         write(os.path.join(path, "draft.py"), "a = 2\n")
         cp.save_copy(path)
-        ok, files = cp.use_copy(self.root, base, branch)
+        ok, files, why = cp.use_copy(self.root, base, branch)
         self.assertTrue(ok, files)
         self.assertEqual(read(self.p("draft.py")), "a = 2\n")
 

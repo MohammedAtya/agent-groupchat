@@ -512,6 +512,7 @@ async function loadList() {
 
 async function openChat(id) {
   current = id; lastSig = ''; lastScrolled = false; openDiffs = new Set();
+  raceOpen = new Set(); raceDiffs = {}; raceSel = new Set();  // per chat: never show another chat's copy
   for (const k in diffCache) delete diffCache[k];
   try { localStorage.setItem('gc-last', id); } catch (e) {}
   $('hdr').hidden = false; $('f').hidden = false;
@@ -732,8 +733,9 @@ const SPLIT_STAGE = {plan: 'the Planner is splitting the task…', await: 'waiti
 function racePanel(c) {  // one card per copy: Use this one / ▸ Diff / combine; Discard at the bottom
   const r = c.race, split = r.kind === 'split', box = document.createElement('div'); box.className = 'race';
   const head = document.createElement('div'); head.className = 'rhead';
-  head.textContent = split ? `🧩 Split: ${SPLIT_STAGE[r.stage] || r.stage}` + (r.fix ? ` (fix round ${r.fix})` : '')
-                           : `⚡ Race: ${RACE_STAGE[r.stage] || r.stage}`;
+  head.textContent = (split ? `🧩 Split: ${SPLIT_STAGE[r.stage] || r.stage}` + (r.fix ? ` (fix round ${r.fix})` : '')
+                            : `⚡ Race: ${RACE_STAGE[r.stage] || r.stage}`) +
+    (r.interrupted ? ' (the server restarted while it ran)' : '');
   box.append(head);
   const ready = (r.stage === 'done' || r.stage === 'stopped') && !c.busy;
   const cards = document.createElement('div'); cards.className = 'cards';
@@ -744,11 +746,12 @@ function racePanel(c) {  // one card per copy: Use this one / ▸ Diff / combine
     const t = document.createElement('div'), b = document.createElement('b'); b.textContent = cp.name; t.append(b);
     const badge = (txt, color) => { const s = document.createElement('span'); s.className = 'badge2'; s.style.color = color; s.textContent = txt; t.append(s); };
     if (r.pick === name) badge("⭐ Reviewer's pick", '#b7791f');
-    if (split && name === 'combined') badge('🧩 Result', '#2f6fde');
+    if (split && cp.from) badge('🧩 Result', '#2f6fde');
     if (r.used === name) badge('✓ used', '#1a7f37');
     card.append(t);
     const line = txt => { const d = document.createElement('div'); d.className = 'muted'; d.textContent = txt; card.append(d); };
-    const st = {working: '● working…', done: '✓ finished', empty: '– changed nothing', error: '✗ error', stopped: '■ stopped', 'timed out': '⏱ timed out'};
+    const st = {working: '● working…', done: '✓ finished', empty: '– changed nothing', error: '✗ error', stopped: '■ stopped',
+                'timed out': '⏱ timed out', conflicts: '⚠ conflict markers left: not usable'};
     if (cp.part) line('🧩 Part: ' + cp.part);
     line(st[cp.status] || cp.status);
     if (cp.files && cp.files.length) line(`✏️ ${cp.files.length} file${cp.files.length > 1 ? 's' : ''}: ${cp.files.join(', ')}` +
@@ -772,12 +775,13 @@ function racePanel(c) {  // one card per copy: Use this one / ▸ Diff / combine
     if (raceOpen.has(name)) {
       const d = document.createElement('div'); d.className = 'diff'; d.textContent = 'Loading…'; card.append(d);
       (async () => {
-        if (!(name in raceDiffs)) {
-          try { const res = await fetch(`/api/chats/${current}/race/diff/${encodeURIComponent(name)}`);
-                raceDiffs[name] = res.ok ? await res.text() : '(diff not available)'; }
+        const key = `${current}/${r.msg}/${name}`, chatId = current;  // cache per chat and per Race
+        if (!(key in raceDiffs)) {
+          try { const res = await fetch(`/api/chats/${chatId}/race/diff/${encodeURIComponent(name)}`);
+                raceDiffs[key] = res.ok ? await res.text() : '(diff not available)'; }
           catch (e) { d.textContent = '(could not load the diff)'; return; }
         }
-        paintDiff(d, raceDiffs[name]);
+        if (chatId === current) paintDiff(d, raceDiffs[key]);
       })();
     }
     cards.append(card);
@@ -790,7 +794,7 @@ function racePanel(c) {  // one card per copy: Use this one / ▸ Diff / combine
   comb.onclick = async () => { const res = await api(`/api/chats/${current}/race`, {action: 'combine', copies: [...raceSel]});
     if (res.error) alert(res.error); raceSel = new Set(); lastSig = ''; refresh(); };
   const disc = document.createElement('button'); disc.type = 'button'; disc.textContent = '🗑 Discard copies';
-  disc.disabled = !ready;
+  disc.disabled = !ready && !(split && r.stage === 'await');
   disc.onclick = async () => { if (!confirm("Delete the Race's copies? (Changes you already used stay in your folder.)")) return;
     const res = await api(`/api/chats/${current}/race`, {action: 'discard'}); if (res.error) alert(res.error);
     raceOpen = new Set(); raceDiffs = {}; lastSig = ''; refresh(); };
