@@ -111,6 +111,44 @@ Name + job instructions + default permission. Made in the settings page (Roles t
   Two copies of the same AI (Claude 1 Lead, Claude 2 Reviewer) are fine, with no warning.
 - No roles set = everyone is a Participant = today's behavior.
 
+### 4.4 Several agents in one role: a focus each
+Any role can be held by several agents (two Leads, three Testers…). To make them **split** the work instead of doing it
+twice, each agent can get a **focus**: a short area like `login`, `database`, `backend API`.
+
+- **Where:** a "Focus (optional)" box under the role checkboxes, in New chat, the Team dialog and saved teams.
+  One focus per agent (it applies to all its roles). One line, up to 120 characters; empty = no focus.
+- **What the agent is told** (in its intro, and in a `[System]` note when it changes):
+  its own focus ("Your focus: login. Work on that area only…") and who else holds its role with which focus
+  ("You share your role with Tester: Gemini (focus: database)"). Each workflow turn repeats it
+  (Lead: "your part only: login"; Tester/Reviewer: "Your focus: login. Check that area only.").
+  Agents in a role nobody else holds, without a focus, are told nothing new.
+- **Leads take turns on one message:** with 2+ Leads, a plain message still goes to every Lead, one at a time
+  (edit lock, §6.3). Each Lead reads the chat **when its turn starts**, so the second Lead sees the first Lead's
+  reply and the files it changed, and is told to build on it instead of redoing it. A Lead keeps its turn until
+  its reply is posted. The same holds for Testers. Participants still answer independently (they read the chat
+  when the message arrives, as before).
+- **Fix rounds:** with several focused Leads, Testers/Reviewers are asked to say whose area each problem is in,
+  and each Lead fixes the problems in its own area.
+- **Race / Split copies:** there the task you give wins. A racer is told "your usual focus is X, but here you do the
+  task you're given". (Using the focuses as Split's parts is a later step.)
+
+**Overlap warning (never a block).** The app checks every pair of agents that share a role (except Participant):
+
+| Pair | Warning |
+|---|---|
+| neither has a focus | both do the whole task, one after the other; give each a focus, or use ⚡ Race |
+| one has no focus | the one without a focus also covers the other's area |
+| same focus | same words after ignoring case, plurals and filler words (`the`, `testing`, `check`…), or one focus's words are all in the other's (`login` / `login page`) |
+| different focuses (`login` / `database`, `login api` / `login page`) | no warning |
+
+- Roles that **edit** (Lead, Tester) get a **⚠** warning: the agents would do the same work twice and can undo each
+  other's changes. On Create / Save the page asks "Keep this setup anyway?".
+- Other roles (Planner, Critic, Reviewer, custom roles) get a soft **ℹ** note: two opinions on the same thing is
+  often on purpose. No confirmation.
+- The warning updates live while you edit the agents (`POST /api/overlaps` with the unsaved rows); it's the app
+  that warns, before any tokens are spent, not an agent.
+- It can only spot the same words: `login` vs `authentication` isn't caught (that would need an AI call).
+
 ---
 
 ## 5. Permissions
@@ -173,6 +211,7 @@ Per-chat setting: 0–3 rounds.
 
 ### 6.3 Editing agents take turns
 Agents that can edit run **one at a time** (edit lock). talk/read agents run in parallel.
+Leads and Testers that wait for their turn read the chat when the turn starts (§4.4).
 (v2: ⚡ Race and 🧩 Split let editing agents work at the same time, each in its own copy; see §14.)
 
 ### 6.4 Carried over unchanged
@@ -184,8 +223,9 @@ reply stats, ▸ Diff, Compact, Markdown rendering, Export, skills (`/skill-name
 ## 7. Screens
 
 ### 7.1 New chat
-Pick a folder → **+ Add agent** (or "add another copy") → name it, give it role(s) → its permissions fill in
-automatically and can be changed → set fix rounds → start.
+Pick a folder → **+ Add agent** (or "add another copy") → name it, give it role(s) and, if it shares a role, a
+focus → its permissions fill in automatically and can be changed → set fix rounds → start. Overlapping
+roles are warned about under the agents table (§4.4).
 **Save as Team** stores this setup (e.g. "Claude builds, Codex reviews") so it can be reused in one click.
 
 ### 7.2 Settings: 3 tabs

@@ -245,7 +245,7 @@ class Changes(ChatTest):
         srv.set_agents(c, [{"id": "codex", "roles": ["reviewer"]}])
         self.send(c, "@codex again")
         prompt = self.calls("codex")[1]["argv"][-1]
-        self.assertTrue(prompt.startswith("[System]: Your role or permissions changed. "
+        self.assertTrue(prompt.startswith("[System]: Your role, focus or permissions changed. "
                                           "Role: Reviewer. READ:"), prompt)
         self.send(c, "@codex third")
         self.assertNotIn("[System]", self.calls("codex")[2]["argv"][-1])
