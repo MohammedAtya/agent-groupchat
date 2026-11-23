@@ -102,6 +102,12 @@ in `~/.agent-groupchat/sessions/`, not in your project.
   automatically (0–3 rounds, default 1), then it comes back to you.
 - An agent can hold several roles (it gets the highest default); several agents can share a role.
   The same agent can't be Lead *and* Reviewer of its own work (two copies of one AI can).
+- **Several agents in one role? Give each a focus**, e.g. *Tester 1* "login", *Tester 2* "database",
+  or *Lead 1* "backend", *Lead 2* "frontend". Each one is told its own area and the others', and
+  Leads take turns: the second sees what the first did and builds on it.
+- **Overlap warning:** if two agents in the same role would do the same work (no focus, or the
+  same focus), New chat and the Team dialog warn you before you start. ⚠ for Leads and Testers
+  (they'd edit the same things), ℹ for Reviewers and others (two opinions can be on purpose).
 - **⚙ Settings → Roles**: copy a built-in role or write your own (name, job, default permission).
 
 ## ⚡ Race and 🧩 Split

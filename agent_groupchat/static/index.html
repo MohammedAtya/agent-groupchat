@@ -213,6 +213,9 @@
                                                      background:var(--bg); cursor:pointer; white-space:nowrap; }
   .ok-msg { color:#1a7f37; font-size:13px; } .bad-msg { color:#d33; font-size:13px; }
   .warn-msg { color:var(--warn); font-size:12px; margin-top:4px; }
+  input.focus { display:block; width:100%; margin-top:4px; padding:4px 7px; font-size:12px; }
+  .overlaps { font-size:12px; margin-top:6px; } .overlaps div { margin:2px 0; }
+  .overlaps .edits { color:var(--warn); } .overlaps .soft { color:var(--muted); }
   /* settings */
   .tabs { display:flex; gap:6px; margin-bottom:12px; }
   .tabs button.on { background:var(--user); color:#fff; border-color:var(--user); }
@@ -306,13 +309,16 @@
     <input id="nFolder">
     <div class="hint">The agents work here and load this folder's CLAUDE.md / AGENTS.md and project skills.</div>
     <label>Agents</label>
-    <table class="agents-table"><thead><tr><th>AI</th><th>Name</th><th>Model</th><th>Roles</th><th>Permission</th><th></th></tr></thead>
+    <table class="agents-table"><thead><tr><th>AI</th><th>Name</th><th>Model</th><th>Roles · focus</th><th>Permission</th><th></th></tr></thead>
       <tbody id="nAgents"></tbody></table>
+    <div class="overlaps" id="nOverlap"></div>
     <button type="button" id="addAgent">+ Add agent</button>
     <div class="warn-msg" id="nMany" hidden>More than 5 agents: every message costs more and turns get slower.</div>
     <div class="hint">Add several copies of the same AI if you like: each one is its own session. An empty name
       becomes "Claude", or "Claude 1", "Claude 2"… for copies. An empty model uses the CLI's default.
       No role = Participant. Roles act in order: Planner + Critic → your OK → Lead → Tester → Reviewer.
+      Several agents can share a role: give each a <b>focus</b> (e.g. Tester 1 "login", Tester 2 "database")
+      so they split the work instead of doing it twice.
       Greyed-out permissions can't be enforced for that AI; ⚠ = raised above the role's default.</div>
     <label class="check"><input type="checkbox" id="nLock"> Start with the 🔒 Talk-only lock (nobody touches files)</label>
     <label for="nRounds">Let the agents reply to each other</label>
@@ -395,7 +401,9 @@
   <form method="dialog">
     <h2>Team: roles and permissions</h2>
     <table><tbody id="teamRows"></tbody></table>
+    <div class="overlaps" id="teamOverlap"></div>
     <div class="hint">An agent can hold several roles; it gets the highest default permission of them.
+      Agents that share a role should each get a different focus (e.g. backend / frontend).
       Greyed-out permissions can't be enforced for that AI. ⚠ = raised above its role's default.</div>
     <div class="inline"><input id="teamName" placeholder="Save this setup as a team, e.g. Claude builds, Codex reviews" maxlength="40">
       <button type="button" id="teamSaveAs">💾 Save as team</button></div>
@@ -434,7 +442,8 @@ function listNames(ids) {
   const n = ids.map(b => names[b] || b);
   return n.length > 2 ? n.slice(0, -1).join(', ') + ' and ' + n[n.length - 1] : n.join(' and ');
 }
-const roleText = a => (a.roles || []).map(r => roleNames[r] || r).join(' + ') || 'Participant';
+const roleText = a => ((a.roles || []).map(r => roleNames[r] || r).join(' + ') || 'Participant') +
+  (a.focus ? ` (${a.focus})` : '');
 function showAgents() {  // one chip per agent: name · role(s) · permission (⚠ raised / limited)
   const box = $('agents'); box.textContent = '';
   for (const a of agentList) {
@@ -1037,13 +1046,17 @@ function choicesFor(adapterId) {  // {level: '' if this AI can enforce it, else 
   return Object.fromEntries(Object.keys(levelNames).map(lv =>
     [lv, (a.levels || []).includes(lv) ? '' : ((a.notes || {})[lv] || "this AI can't do that")]));
 }
-function rolePermCells(choices, roleIds, level, limited) {
+function rolePermCells(choices, roleIds, level, limited, focus) {
   const rc = document.createElement('td'); rc.className = 'roles';
   for (const r of roles.filter(r => r.id !== 'participant')) {
     const l = document.createElement('label'), cb = document.createElement('input');
     cb.type = 'checkbox'; cb.value = r.id; cb.checked = (roleIds || []).includes(r.id);
     l.title = r.job || ''; l.append(cb, r.name); rc.append(l);
   }
+  const fo = document.createElement('input'); fo.className = 'focus'; fo.maxLength = 120;
+  fo.placeholder = 'Focus (optional), e.g. login, database'; fo.value = focus || '';
+  fo.title = 'The area this agent works on, so agents with the same role split the work';
+  rc.append(fo);
   const pc = document.createElement('td'); pc.style.width = '30%';
   const sel = document.createElement('select'), note = document.createElement('div'); note.className = 'note';
   const order = Object.keys(levelNames);
@@ -1072,8 +1085,33 @@ function rolePermCells(choices, roleIds, level, limited) {
   fill(choices); update();
   rc.onchange = update; sel.onchange = update;
   pc.append(sel, note);
-  return {rc, pc, roles: checked, level: () => sel.value || null,
+  return {rc, pc, roles: checked, level: () => sel.value || null, focus: () => fo.value.trim() || null,
           setChoices: ch => { fill(ch); update(); }};
+}
+// ---- agents that share a role and would do the same work (SPEC §4.4): warn, never block
+const overlapTimers = {}, overlapSeq = {};
+function watchOverlaps(rowsEl, boxEl, specs) {  // re-check while the user edits the rows
+  const check = () => {
+    clearTimeout(overlapTimers[boxEl.id]);
+    const seq = overlapSeq[boxEl.id] = (overlapSeq[boxEl.id] || 0) + 1;
+    overlapTimers[boxEl.id] = setTimeout(async () => {
+      let r; try { r = await api('/api/overlaps', {agents: specs()}); } catch (e) { return; }
+      if (seq !== overlapSeq[boxEl.id]) return;  // the rows changed again meanwhile
+      boxEl.textContent = '';
+      for (const o of r.overlaps || []) {
+        const d = document.createElement('div'); d.className = o.edits ? 'edits' : 'soft';
+        d.textContent = (o.edits ? '⚠ ' : 'ℹ ') + o.text; boxEl.append(d);
+      }
+    }, 250);
+  };
+  boxEl.textContent = '';
+  rowsEl.oninput = rowsEl.onchange = check; check();
+  return check;
+}
+async function confirmOverlaps(specs) {  // before saving: agents that edit would collide
+  let r; try { r = await api('/api/overlaps', {agents: specs}); } catch (e) { return true; }
+  const bad = (r.overlaps || []).filter(o => o.edits);
+  return !bad.length || confirm(bad.map(o => '⚠ ' + o.text).join('\n\n') + '\n\nKeep this setup anyway?');
 }
 function confirmAuto(names_) {
   return !names_.length || confirm(`Auto for ${names_.join(', ')}: it can run commands, use the ` +
@@ -1082,34 +1120,42 @@ function confirmAuto(names_) {
 }
 
 // ---- Team dialog (open chat): roles + permission per agent, save the setup as a team
+let teamGen = 0, newGen = 0;  // which opening of the dialog a pending save belongs to
 function openTeam() {
   if (!chat) return;
+  teamGen++;
   const rows = $('teamRows'); rows.textContent = '';
   $('teamErr').textContent = ''; $('teamMsg').textContent = ''; $('teamName').value = '';
   for (const a of agentList) {
     const p = perm[a.id] || {}, tr = document.createElement('tr'); tr.dataset.id = a.id;
     const n = document.createElement('td'); n.style.width = '22%';
     const b = document.createElement('b'); b.style.color = colorOf(a.id); b.textContent = a.name; n.append(b);
-    const cells = rolePermCells(p.choices || choicesFor(a.adapter), a.roles, a.level, p.limited);
+    const cells = rolePermCells(p.choices || choicesFor(a.adapter), a.roles, a.level, p.limited, a.focus);
     tr._cells = cells; tr.append(n, cells.rc, cells.pc); rows.append(tr);
   }
+  watchOverlaps(rows, $('teamOverlap'), teamSpecs);
   $('team').showModal();
 }
+const teamSpecs = () => teamRowsNow().map(x =>
+  ({adapter: agentOf(x.id).adapter, name: agentOf(x.id).name, roles: x.roles, focus: x.focus}));
 const teamRowsNow = () => [...$('teamRows').children].map(tr =>
-  ({id: tr.dataset.id, roles: tr._cells.roles(), level: tr._cells.level()}));
+  ({id: tr.dataset.id, roles: tr._cells.roles(), level: tr._cells.level(), focus: tr._cells.focus()}));
 $('teamBtn').onclick = openTeam;
 $('teamSave').onclick = async e => {
   e.preventDefault();
   const agents = teamRowsNow();
   if (!confirmAuto(agents.filter(a => a.level === 'auto' && agentOf(a.id).level !== 'auto')
                          .map(a => names[a.id]))) return;
-  const r = await api(`/api/chats/${current}/agents`, {agents});
+  const cid = current, gen = teamGen;  // (the user may cancel or switch chats while we ask)
+  if (!await confirmOverlaps(teamSpecs()) || cid !== current || gen !== teamGen || !$('team').open) return;
+  const r = await api(`/api/chats/${cid}/agents`, {agents});
   if (r.error) { $('teamErr').textContent = r.error; return; }
   $('team').close(); lastSig = ''; refresh();
 };
 $('teamSaveAs').onclick = () => saveTeam($('teamName').value, teamRowsNow().map(x => {
   const a = agentOf(x.id);
-  return {adapter: a.adapter, name: a.name, model: a.model || '', roles: x.roles, level: x.level};
+  return {adapter: a.adapter, name: a.name, model: a.model || '', roles: x.roles, level: x.level,
+          focus: x.focus};
 }), {lock: !!chat.lock, fix_rounds: chat.fix_rounds ?? 1, rounds: chat.rounds}, $('teamMsg'));
 
 // ---- saved teams (config.json "teams")
@@ -1157,22 +1203,23 @@ function agentRow(spec = {}) {
   sel.value = spec.adapter || (adapters.find(a => a.installed) || adapters[0] || {}).id;
   const nm = document.createElement('input'); nm.placeholder = 'optional'; nm.maxLength = 40; nm.value = spec.name || '';
   const md = document.createElement('input'); md.maxLength = 80; md.value = spec.model || '';
-  const cells = rolePermCells(choicesFor(sel.value), spec.roles, spec.level, '');
+  const cells = rolePermCells(choicesFor(sel.value), spec.roles, spec.level, '', spec.focus);
   const hintModel = () => { const a = adapters.find(x => x.id === sel.value) || {};
     md.placeholder = a.needs_model ? 'required' : 'default'; };
   sel.onchange = () => { hintModel(); cells.setChoices(choicesFor(sel.value)); };
   hintModel();
   const rm = document.createElement('button'); rm.type = 'button'; rm.className = 'x'; rm.textContent = '✕';
   rm.title = 'Remove this agent';
-  rm.onclick = () => { if ($('nAgents').children.length > 1) { tr.remove(); countAgents(); } };
+  rm.onclick = () => { if ($('nAgents').children.length > 1) { tr.remove(); countAgents(); checkNew(); } };
   const td = el => { const c = document.createElement('td'); c.append(el); return c; };
   tr.append(td(sel), td(nm), td(md), cells.rc, cells.pc, td(rm));
   tr._get = () => ({adapter: sel.value, name: nm.value.trim(), model: md.value.trim(),
-                    roles: cells.roles(), level: cells.level()});
+                    roles: cells.roles(), level: cells.level(), focus: cells.focus()});
   $('nAgents').append(tr); countAgents();
 }
 const newAgents = () => [...$('nAgents').children].map(tr => tr._get());
-const countAgents = () => { $('nMany').hidden = $('nAgents').children.length <= 5; };
+const countAgents = () => { $('nMany').hidden = $('nAgents').children.length <= 5; checkNew(); };
+let checkNew = () => {};  // set when the dialog opens (watchOverlaps)
 let savedTeams = [];
 function useTeam(t) {
   $('nAgents').textContent = '';
@@ -1194,6 +1241,7 @@ function defaultAgents() {
   if (!$('nAgents').children.length) agentRow();
 }
 async function openNew(teamName) {
+  newGen++;
   $('nTitle').value = ''; $('nFolder').value = home || '~'; $('err').textContent = '';
   $('nTeamMsg').textContent = ''; $('nTeamName').value = '';
   $('nAgents').textContent = ''; $('nLock').checked = false; $('nFix').value = '1'; $('nRounds').value = '1';
@@ -1202,6 +1250,7 @@ async function openNew(teamName) {
   for (const t of savedTeams) { const o = document.createElement('option'); o.value = o.textContent = t.name; sel.append(o); }
   const t = savedTeams.find(x => x.name === teamName);
   sel.value = t ? t.name : '';
+  checkNew = watchOverlaps($('nAgents'), $('nOverlap'), newAgents);
   if (t) useTeam(t); else defaultAgents();
   $('dlg').showModal(); $('nFolder').focus();
 }
@@ -1212,6 +1261,8 @@ $('create').onclick = async e => {
   e.preventDefault();
   const agents = newAgents();
   if (!confirmAuto(agents.filter(a => a.level === 'auto').map(a => a.name || adapterNames[a.adapter]))) return;
+  const gen = newGen;  // (the user may cancel while we ask)
+  if (!await confirmOverlaps(agents) || gen !== newGen || !$('dlg').open) return;
   let r;
   try {
     r = await api('/api/chats', {title: $('nTitle').value, folder: $('nFolder').value, agents,
@@ -1266,7 +1317,8 @@ function teamListRow(t) {
   const name = inp(t.name, '', 40);
   const who = document.createElement('span'); who.className = 'muted';
   who.textContent = t.agents.map(a => `${a.name || adapterNames[a.adapter] || a.adapter}` +
-    ` (${(a.roles || []).map(r => roleNames[r] || r).join(' + ') || 'Participant'})`).join(' · ');
+    ` (${(a.roles || []).map(r => roleNames[r] || r).join(' + ') || 'Participant'}` +
+    `${a.focus ? ': ' + a.focus : ''})`).join(' · ');
   tr.append(cell(name), cell(who), cell(btn2('Use', () => { $('settings').close(); openNew(t.name); },
                                              'Start a new chat with this team'),
                                         btn2('✕', () => tr.remove(), 'Delete this team')));

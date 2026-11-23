@@ -113,6 +113,7 @@ def migrate(c):
         c["sessions"].setdefault(a["id"], None)
         a.setdefault("roles", [])
         a.setdefault("level", None)
+        a.setdefault("focus", None)
     mode = c.pop("mode", None)  # before roles: one mode for the whole chat
     if mode in ("talk", "auto"):
         for a in c["agents"]:
@@ -207,6 +208,22 @@ def check_roles_and_level(adapter_id, roles, level, name="this agent"):
                              + ad.why_not(level, True))
 
 
+FOCUS_MAX = 120
+
+
+def clean_focus(value, name="this agent"):
+    """An agent's focus (SPEC §4.4): one short line of text, or None. Raises ValueError."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"{name}: the focus must be text, e.g. login or database.")
+    focus = " ".join("".join(ch for ch in value if ch.isprintable() or ch.isspace()).split())
+    if len(focus) > FOCUS_MAX:
+        raise ValueError(f"{name}: keep the focus under {FOCUS_MAX} characters "
+                         "(a short area like 'login' or 'database').")
+    return focus or None
+
+
 def parse_agents(specs):
     """Validate agent specs from the page -> [{adapter, name, model, roles, level}].
     Raises ValueError."""
@@ -230,8 +247,9 @@ def parse_agents(specs):
             if isinstance(sp.get("roles") or [], list) else sp.get("roles")
         level = sp.get("level") or None
         check_roles_and_level(sp["adapter"], roles, level, name or ADAPTERS[sp["adapter"]].name)
+        focus = clean_focus(sp.get("focus"), name or ADAPTERS[sp["adapter"]].name)
         out.append({"adapter": sp["adapter"], "name": name, "model": model or None,
-                    "roles": roles, "level": level})
+                    "roles": roles, "level": level, **({"focus": focus} if focus else {})})
     return out
 
 
@@ -262,7 +280,8 @@ def make_agents(specs):
             aid, k = f"{first_id}-{k}", k + 1
         ids.add(aid)
         agents.append({"id": aid, "adapter": ad.id, "name": name, "model": sp.get("model"),
-                       "roles": list(sp.get("roles") or []), "level": sp.get("level")})
+                       "roles": list(sp.get("roles") or []), "level": sp.get("level"),
+                       "focus": sp.get("focus") or None})
     return agents
 
 
@@ -365,8 +384,9 @@ def can_edit(level):
     return rank(level) >= rank("edit")
 
 
-def permission_text(chat, bot):
-    """What this agent may do and what its job is, told to it at the start and on changes."""
+def permission_text(chat, bot, copy=False):
+    """What this agent may do and what its job is, told to it at the start and on changes.
+    copy: it works in a Race/Split copy, where it does the task it's given (not its focus)."""
     info, ad = level_info(chat, bot), adapter_of(chat, bot)
     text = ad.mode_text(info["level"])
     if info["locked"]:
@@ -376,11 +396,133 @@ def permission_text(chat, bot):
     if can_edit(info["level"]) and len(chat["agents"]) > 1:
         text += " Agents that can edit take turns, so you won't edit at the same time as another."
     jobs = [r.job for r in role_list(chat, bot) if r.job]
-    return text + ("\n" + " ".join(jobs) if jobs else "")
+    return text + ("\n" + " ".join(jobs) if jobs else "") + focus_text(chat, bot, copy)
 
 
 def role_names(chat, aid):
     return [r.name for r in role_list(chat, aid)]
+
+
+# ---------------------------------------------------------------- focus (SPEC §4.4)
+# Several agents can share a role; each can get a focus (an area: "login", "database") so they
+# split the work instead of doing it twice. Overlapping focuses get a warning, never a block.
+
+def shared_roles(agents, aid):
+    """[(Role, [the other agents holding it])] for this agent's roles that others hold too."""
+    known = roles_now()
+    me = next(a for a in agents if a["id"] == aid)
+    out = []
+    for rid in me.get("roles") or []:
+        if rid in known and rid != DEFAULT_ROLE:
+            others = [a for a in agents if a["id"] != aid and rid in (a.get("roles") or [])]
+            if others:
+                out.append((known[rid], others))
+    return out
+
+
+def focus_text(chat, bot, copy=False):
+    """Told to the agent: its focus, and who else holds its roles with which focus."""
+    mine = agent(chat, bot).get("focus")
+    if copy:
+        return (f" Your usual focus is {mine}, but here you do the task you're given."
+                if mine else "")
+    shared = shared_roles(chat["agents"], bot)
+    text = (f" Your focus: {mine}. Work on that area only and leave the others' areas to them."
+            if mine else "")
+    if shared:
+        text += " You share your role with " + "; ".join(
+            f"{r.name}: " + ", ".join(f"{a['name']} (focus: {a['focus']})" if a.get("focus")
+                                      else f"{a['name']} (no focus)" for a in others)
+            for r, others in shared) + "."
+        text += (" Look at what they already did above and don't redo it." if not mine else
+                 " Don't redo their part.")
+    return text
+
+
+FOCUS_STOP = {"a", "an", "the", "and", "or", "of", "for", "to", "in", "on", "with", "all",
+              "only", "part", "parts", "area", "test", "tests", "testing", "check", "checks",
+              "checking", "review", "reviewing", "code"}
+
+
+def focus_key(w):
+    """One key for a word's singular and plural: logins/login, cookies/cookie,
+    dependencies/dependency -> login, cooki, dependenci."""
+    if len(w) > 3 and w.endswith("s") and not w.endswith("ss"):
+        w = w[:-1]
+    if len(w) > 3 and w.endswith("ie"):
+        w = w[:-1]
+    elif len(w) > 3 and w.endswith("y"):
+        w = w[:-1] + "i"
+    return w
+
+
+def focus_words(focus):
+    """'Testing the Login page' -> {'login', 'page'} (for spotting the same focus twice)."""
+    raw = re.findall(r"[^\W_]+", (focus or "").lower())
+    words = {focus_key(w) for w in raw if w not in FOCUS_STOP}
+    # only filler words, or no letters at all (an emoji): compare the text as a whole
+    return words or set(raw) or {" ".join((focus or "").lower().split())}
+
+
+def overlaps(agents):
+    """Agents that share a role and would do the same work (SPEC §4.4) ->
+    [{"role", "agents": [ids], "kind": same|none|open, "edits", "text"}].
+    edits: the role changes files (Lead, Tester), so a duplicate collides, not just repeats."""
+    known, out = roles_now(), []
+    for rid, role in known.items():
+        if rid == DEFAULT_ROLE:
+            continue
+        holders = [a for a in agents if rid in (a.get("roles") or [])]
+        edits = role.stage in ("work", "test")
+        for i, x in enumerate(holders):
+            for y in holders[i + 1:]:
+                fx, fy = x.get("focus"), y.get("focus")
+                both = f"{x['name']} and {y['name']} are both {role.name}"
+                if not fx and not fy:
+                    kind = "none"
+                    text = (f"{both} and neither has a focus, so both do the whole task"
+                            + (" one after the other: the same work twice. Give each a focus "
+                               "(e.g. backend / frontend), or use ⚡ Race to let them compete."
+                               if edits else ". Fine if you want two opinions; otherwise give "
+                               "each a focus."))
+                elif not fx or not fy:
+                    kind = "open"
+                    free, busy = (x, y) if not fx else (y, x)
+                    text = (f"{both}, but {free['name']} has no focus, so it also covers "
+                            f"{busy['name']}'s ({busy['focus']}). Give {free['name']} a focus "
+                            "of its own.")
+                else:
+                    wx, wy = focus_words(fx), focus_words(fy)
+                    if not (wx <= wy or wy <= wx):
+                        continue
+                    kind = "same"
+                    same = fx if fx.lower() == fy.lower() else f"{fx} / {fy}"
+                    text = (f"{both} with the same focus ({same})"
+                            + (": they'll do the same work twice and can undo each other's "
+                               "changes. Give each a different focus." if edits else
+                               ": two opinions on the same thing. Fine if that's what you want."))
+                out.append({"role": rid, "agents": [x["id"], y["id"]], "kind": kind,
+                            "edits": edits, "text": text})
+    return out
+
+
+def overlaps_for_specs(specs):
+    """POST /api/overlaps: the page's agent rows (not saved yet) -> overlaps."""
+    if not isinstance(specs, list):
+        raise ValueError("agents must be a list")
+    rows = []
+    for sp in specs[:MAX_AGENTS]:
+        if not isinstance(sp, dict) or sp.get("adapter") not in ADAPTERS:
+            continue
+        roles = sp.get("roles") if isinstance(sp.get("roles"), list) else []
+        try:
+            focus = clean_focus(sp.get("focus"))
+        except ValueError:
+            focus = None
+        name = str(sp.get("name") or "").strip()
+        rows.append({"adapter": sp["adapter"], "name": name if NAME_RE.match(name) else "",
+                     "roles": [r for r in roles if isinstance(r, str)], "focus": focus})
+    return overlaps(make_agents(rows))
 
 
 # ---------------------------------------------------------------- settings (config.json)
@@ -497,6 +639,8 @@ def intro(bot, chat, folder=None):
             bits.append("a separate session of the same AI as you")
         if a.get("roles"):
             bits.append("role: " + ", ".join(role_names(chat, a["id"])))
+        if a.get("focus"):
+            bits.append("focus: " + a["focus"])
         return f"{a['name']} ({'; '.join(bits)})"
 
     with_whom = ("these AI agents: " + "; ".join(map(describe, others))) if others \
@@ -510,7 +654,7 @@ def intro(bot, chat, folder=None):
            "work only in your copy. It's a git worktree that shares the user's stash and branches: "
            "don't use git stash, and don't create, switch, delete or reset branches). "
            if folder else f"Project folder: {chat['folder']}. ")
-        + f"{permission_text(chat, bot)}\n"
+        + f"{permission_text(chat, bot, copy=bool(folder))}\n"
         "Messages arrive labeled [User]"
         + (f" or with the sender's name ({labels}). Every AI gets each user message at the same "
            "time and answers independently; afterwards you may see the others' answers. "
@@ -587,14 +731,25 @@ def mentioned(chat, text):
     return [b for b in agent_ids(chat) if b in found]
 
 
-def unseen_for(chat, bot):
+def unseen_for(chat, bot, peek=False, known=None, stage=""):
     """(indices of the user messages among them, new messages from others since this
-    bot's last turn); marks them seen."""
+    bot's last turn); marks them seen (unless peek).
+    known: the chat's length when this turn began. Messages added since are included (e.g. the
+    Lead before this one), but not from the next user message on: that's a new turn. Replies
+    in the same workflow `stage` posted after it are still shown (and shown again later)."""
     with lock:
         start = chat["seen"][bot]
-        msgs = chat["messages"][start:]
-        chat["seen"][bot] = len(chat["messages"])
-        save(chat)
+        end = len(chat["messages"])
+        if known is not None:
+            end = next((i for i in range(max(known, start), end)
+                        if chat["messages"][i]["who"] == "user"), end)
+        msgs = chat["messages"][start:end]
+        if known is not None and stage:
+            msgs = msgs + [m for m in chat["messages"][end:] if m["who"] not in ("user", bot)
+                           and (m.get("meta") or {}).get("stage") == stage]
+        if not peek:
+            chat["seen"][bot] = end
+            save(chat)
     users = [start + k for k, m in enumerate(msgs) if m["who"] == "user"]
     # a bot never re-reads its own messages, except a chat summary (its fresh session needs it)
     # and what it did in a Race copy (that ran in a separate session)
@@ -860,14 +1015,24 @@ def note_changes(chat, bot):
     (Claude gets its intro every turn, but Codex only at the start of its session)."""
     info = level_info(chat, bot)
     sig = [info["level"], info["locked"], list(agent(chat, bot).get("roles") or [])]
+    team = focus_text(chat, bot)
+    if team:  # (only then: chats saved before focuses keep their old signature)
+        sig.append(team)
     with lock:
         told = chat.setdefault("told", {})
-        changed = told.get(bot) not in (None, sig)
+        before = told.get(bot)
+        changed = before not in (None, sig)
         told[bot] = sig
     if not changed:
         return ""
-    return (f"[System]: Your role or permissions changed. Role: {', '.join(role_names(chat, bot))}. "
-            f"{permission_text(chat, bot)}\n\n")
+    had = len(before) > 3 and "Your focus:" in before[3]
+    lifted = ("" if agent(chat, bot).get("focus") else
+              " You no longer have a focus or share your role: the whole task is yours again."
+              if not team and len(before) > 3 else
+              " You no longer have a focus of your own." if team and had else "")
+    return (f"[System]: Your role, focus or permissions changed. "
+            f"Role: {', '.join(role_names(chat, bot))}. "
+            f"{permission_text(chat, bot)}{lifted}\n\n")
 
 
 def warning(chat, bot, level, files):
@@ -895,18 +1060,8 @@ def verdict(text):
 ROLE_VERB = {"plan": "planning", "work": "working", "test": "testing", "review": "reviewing"}
 
 
-def ask(chat, bot, extra="", cap=None, role=None, stage="", force=False, race=False):
-    """Give `bot` everything it hasn't seen yet (plus `extra`) and post its reply.
-    cap: highest permission level for this turn (e.g. "read" for a summary).
-    role/stage: which role it answers in (shown under the reply; drives warnings/verdicts).
-    force: ask even if there's nothing new (an agent with two roles, e.g. Lead + Tester)."""
-    users, msgs = unseen_for(chat, bot)
-    if not msgs and not force:
-        return None
-    set_status(chat, users, bot, "running")
-    level = level_of(chat, bot)
-    if cap and rank(level) > rank(cap):
-        level = cap
+def build_prompt(chat, bot, msgs, extra=""):
+    """The turn's prompt: changes to its role/permissions, the new messages, then `extra`."""
     note = note_changes(chat, bot)
     last_user = next((m for m in reversed(msgs) if m["who"] == "user"), None)
     sk = last_user.get("skill") if last_user else None
@@ -919,16 +1074,39 @@ def ask(chat, bot, extra="", cap=None, role=None, stage="", force=False, race=Fa
         prompt = f"/{sk['name']} {sk['args']}".strip()
         if ctx.strip():
             prompt += "\n\n(Group-chat messages since your last turn, for context:\n" + ctx + ")"
-    elif sk and syntax == "dollar":  # (syntax "none": a chat API has no skills)
+        return prompt
+    if sk and syntax == "dollar":  # (syntax "none": a chat API has no skills)
         # e.g. Codex runs a skill when the message mentions $name
         shown = [dict(m, text=re.sub(r"/" + re.escape(sk["name"]) + r"\b", "$" + sk["name"],
                                      m["text"], count=1, flags=re.I))
                  if m is last_user else m for m in msgs]
-        prompt = note + format_msgs(chat, shown) + extra
-    elif msgs:
-        prompt = note + format_msgs(chat, msgs) + extra
-    else:
-        prompt = note + extra.strip()
+        return note + format_msgs(chat, shown) + extra
+    if msgs:
+        return note + format_msgs(chat, msgs) + extra
+    return note + extra.strip()
+
+
+def ask(chat, bot, extra="", cap=None, role=None, stage="", force=False, race=False):
+    """Give `bot` everything it hasn't seen yet (plus `extra`) and post its reply.
+    cap: highest permission level for this turn (e.g. "read" for a summary).
+    role/stage: which role it answers in (shown under the reply; drives warnings/verdicts).
+    force: ask even if there's nothing new (an agent with two roles, e.g. Lead + Tester).
+    extra: text added after the messages, or a function that writes it when the turn starts."""
+    # Leads and Testers that share the role take turns on the same task: one that waited for
+    # its turn reads the chat only then, so it sees what the one before it said and changed
+    # (SPEC §4.4). Everyone else answers independently, as the intro says.
+    late = stage in ("work", "test")
+    if callable(extra) and not late:  # extra may be written when the turn starts (stage notes)
+        extra = extra()
+    known = len(chat["messages"])
+    users, msgs = unseen_for(chat, bot, peek=late)
+    if not msgs and not force:
+        return None
+    set_status(chat, users, bot, "running")
+    prompt = None if late else build_prompt(chat, bot, msgs, extra)
+    level = level_of(chat, bot)
+    if cap and rank(level) > rank(cap):
+        level = cap
     editor = can_edit(level)
     start = time.time()
     with lock:
@@ -937,12 +1115,17 @@ def ask(chat, bot, extra="", cap=None, role=None, stage="", force=False, race=Fa
             "since": start, "steps": [],
             "role": "summarizing" if role == "summary" else ROLE_VERB.get(stage, "")}
     elock = edit_locks.setdefault(chat["id"], threading.Lock()) if editor else None
-    before, meta, reply, got = None, {}, "(stopped)", False
+    before, meta, reply, got, hold = None, {}, "(stopped)", False, False
     try:
         if elock and not elock.acquire(blocking=False):  # another agent is editing: wait
             step(chat, bot, "⏳ waiting for its turn to edit")
             elock.acquire()
         got = bool(elock)
+        if late:
+            extra = extra() if callable(extra) else extra
+            users, msgs = unseen_for(chat, bot, known=known, stage=stage)
+            set_status(chat, users, bot, "running")
+            prompt = build_prompt(chat, bot, msgs, extra)
         if chat["id"] not in halted:
             before = snapshot(chat["folder"])
             run_start = time.time()
@@ -963,40 +1146,46 @@ def ask(chat, bot, extra="", cap=None, role=None, stage="", force=False, race=Fa
                 if after is not None:
                     meta["files"] = list(dict.fromkeys((meta.get("files") or [])
                                                        + changed_files(before, after, chat["folder"])))
+        # a Lead/Tester keeps its turn until its reply is posted, so the next one sees it
+        hold = got and late
     finally:
-        if got:
+        if got and not hold:
             elock.release()
         with lock:
             typing.get(chat["id"], {})[bot] = False
             activity.get(chat["id"], {}).pop(bot, None)
-    set_status(chat, users, bot, outcome(reply))
-    if outcome(reply) == "passed":
-        return PASS
-    files = meta.get("files") or []
-    diff = make_diff(before, files, chat["folder"]) if before is not None and files else ""
-    meta = {k: v for k, v in meta.items() if v}
-    meta["secs"] = round(time.time() - start)
-    meta["for"] = users  # which of your messages this answers (for Retry)
-    if role:
-        meta["role"] = role
-    if stage:
-        meta["stage"] = stage
-    if race:
-        meta["race"] = True  # part of a Race/Split: never retried in the user's folder
-    warn = warning(chat, bot, level, files)
-    if warn:
-        meta["warn"] = warn
-    if stage in ("test", "review") and verdict(reply):
-        meta["verdict"] = verdict(reply)
-    if diff:
-        meta["diff"] = [diff.count("\n+") - diff.count("\n+++"),
-                        diff.count("\n-") - diff.count("\n---")]
-    idx = add_msg(chat, bot, reply, meta=meta)
-    if diff and not chat.get("deleted"):
-        os.makedirs(os.path.dirname(diff_path(chat["id"], idx)), exist_ok=True)
-        with open(diff_path(chat["id"], idx), "w", encoding="utf-8") as f:
-            f.write(diff)
-    return reply
+    try:
+        set_status(chat, users, bot, outcome(reply))
+        if outcome(reply) == "passed":
+            return PASS
+        files = meta.get("files") or []
+        diff = make_diff(before, files, chat["folder"]) if before is not None and files else ""
+        meta = {k: v for k, v in meta.items() if v}
+        meta["secs"] = round(time.time() - start)
+        meta["for"] = users  # which of your messages this answers (for Retry)
+        if role:
+            meta["role"] = role
+        if stage:
+            meta["stage"] = stage
+        if race:
+            meta["race"] = True  # part of a Race/Split: never retried in the user's folder
+        warn = warning(chat, bot, level, files)
+        if warn:
+            meta["warn"] = warn
+        if stage in ("test", "review") and verdict(reply):
+            meta["verdict"] = verdict(reply)
+        if diff:
+            meta["diff"] = [diff.count("\n+") - diff.count("\n+++"),
+                            diff.count("\n-") - diff.count("\n---")]
+        idx = add_msg(chat, bot, reply, meta=meta)
+        if diff and not chat.get("deleted"):
+            os.makedirs(os.path.dirname(diff_path(chat["id"], idx)), exist_ok=True)
+            with open(diff_path(chat["id"], idx), "w", encoding="utf-8") as f:
+                f.write(diff)
+        return reply
+    finally:
+        if hold:
+            elock.release()
 
 
 def parallel(chat, bots, extra="", extras=None, opts=None):
@@ -1074,26 +1263,41 @@ def stage_note(chat, bot, stage, f):
                 "risks, wrong assumptions, what's missing. Be brief and specific. Don't do the "
                 f"work: {after})")
     checkers = stage_agents(chat, "test") + stage_agents(chat, "review")
+    focus = agent(chat, bot).get("focus")
     if stage == "work":
         then = (f"After you, {names_of(chat, checkers)} check it." if checkers else
                 "Then it goes back to the user.")
+        theirs = sorted({x for m in chat["messages"][f["msg"]:] if m["who"] in leads
+                         and m["who"] != bot for x in (m.get("meta") or {}).get("files") or []})
+        turns = (f" The Leads ({names_of(chat, leads)}) take turns: build on what the others "
+                 "already did above instead of redoing it"
+                 + (f" (files they changed: {', '.join(theirs[:20])})" if theirs else "") + "."
+                 if len(leads) > 1 else "")
         if f["fix"]:
+            mine = ("" if not focus else
+                    f" (the ones in your area, {focus}; leave the others to the other Leads)"
+                    if len(leads) > 1 else f" (your focus: {focus})")
             return (f"\n\n(Workflow · Lead, fix round {f['fix']} of {chat.get('fix_rounds', 1)}: "
-                    "the Tester/Reviewer found problems above. Fix them, then say briefly what "
-                    f"you changed. {then})")
+                    f"the Tester/Reviewer found problems above. Fix them{mine}, then say briefly "
+                    f"what you changed.{turns} {then})")
         plan = " following the plan above" if "plan" in f["stages"] else ""
-        return f"\n\n(Workflow · Lead: do the work for the user's latest request now{plan}. {then})"
+        part = f", your part only: {focus}" if focus else ""
+        return (f"\n\n(Workflow · Lead: do the work for the user's latest request now{plan}"
+                f"{part}.{turns} {then})")
+    area = f" Your focus: {focus}. Check that area only." if focus else ""
     files = sorted({x for m in chat["messages"][f["msg"]:] if m["who"] in leads
                     for x in (m.get("meta") or {}).get("files") or []})
     did = (f"{names_of(chat, leads)} just did the work above"
            + (f" (files changed: {', '.join(files)})" if files else "") + "."
            if leads else "Look at the user's latest request above.")
     end = ("End your reply with exactly one line: VERDICT: LGTM if nothing needs fixing, or "
-           "VERDICT: FIX if the Lead must change something.")
+           "VERDICT: FIX if the Lead must change something."
+           + (" Say whose area each problem is in, so the right Lead fixes it."
+              if len(leads) > 1 and any(agent(chat, b).get("focus") for b in leads) else ""))
     if stage == "test":
-        return (f"\n\n(Workflow · Tester: {did} Write or update tests for it and run them. Only "
-                f"change test files, never the code under test. Report what fails. {end})")
-    return (f"\n\n(Workflow · Reviewer: {did} Check it against what the user asked: bugs, missed "
+        return (f"\n\n(Workflow · Tester: {did}{area} Write or update tests for it and run them. "
+                f"Only change test files, never the code under test. Report what fails. {end})")
+    return (f"\n\n(Workflow · Reviewer: {did}{area} Check it against what the user asked: bugs, missed "
             "requirements, risky edits. Read the files and, where your permissions allow, run "
             "read-only checks such as the tests or git diff, but do NOT modify any files. Say "
             f"concretely what to fix. {end})")
@@ -1173,15 +1377,18 @@ def go_ahead(chat):
 def run_stage(chat, f, stage):
     """Ask the agents of one stage. -> False if the flow can't go on (e.g. every Lead failed)."""
     who = stage_agents(chat, stage)
-    if f.get("only"):  # Retry: just the agent whose reply failed
-        who = [b for b in who if b in f.pop("only")]
+    only = f.pop("only", None)
+    if only:  # Retry: just the agent whose reply failed
+        who = [b for b in who if b in only]
     if not who:
         return True
 
     def role_name(b):
         return next((r.name for r in role_list(chat, b) if r.stage == stage), "")
     opts = {b: {"role": role_name(b), "stage": stage, "force": stage != "plan"} for b in who}
-    res = parallel(chat, who, extras={b: stage_note(chat, b, stage, f) for b in who}, opts=opts)
+    # each note is written when that agent's turn starts (a Lead's lists the earlier Leads' files)
+    notes = {b: (lambda b=b: stage_note(chat, b, stage, f)) for b in who}
+    res = parallel(chat, who, extras=notes, opts=opts)
     if stage in ("test", "review"):
         with lock:
             for b in who:
@@ -2023,7 +2230,8 @@ def step_split(chat, r):
 
 
 def set_agents(chat, specs):
-    """Change roles and permission overrides: [{"id", "roles": [...], "level": None|level}]."""
+    """Change roles, permission overrides and focuses:
+    [{"id", "roles": [...], "level": None|level, "focus": None|text}]."""
     if not isinstance(specs, list):
         raise ValueError("agents must be a list")
     changes = {}
@@ -2035,11 +2243,12 @@ def set_agents(chat, specs):
         roles = [r for r in roles if r != DEFAULT_ROLE] if isinstance(roles, list) else roles
         level = sp.get("level") or None
         check_roles_and_level(a["adapter"], roles, level, a["name"])
-        changes[a["id"]] = (roles, level)
+        focus = clean_focus(sp.get("focus", a.get("focus")), a["name"])
+        changes[a["id"]] = (roles, level, focus)
     with lock:
-        for aid, (roles, level) in changes.items():
+        for aid, (roles, level, focus) in changes.items():
             a = agent(chat, aid)
-            a["roles"], a["level"] = roles, level
+            a["roles"], a["level"], a["focus"] = roles, level, focus
         save(chat)
 
 
@@ -2424,6 +2633,9 @@ class Handler(BaseHTTPRequestHandler):
             except (ValueError, TypeError) as e:
                 return self.send_json({"error": str(e)}, 400)
             return self.send_json({"ok": True})
+        if p == "/api/overlaps":  # the page's agent rows -> who would do the same work
+            refresh_adapters()
+            return self.send_json({"overlaps": overlaps_for_specs(d.get("agents"))})
         if p == "/api/legacy":
             if d.get("action") == "import":
                 return self.send_json({"ok": True, "imported": import_legacy()})
