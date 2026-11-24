@@ -663,7 +663,9 @@ def intro(bot, chat, folder=None):
         + (f" or the other AIs directly (@{others[0]['id']} reaches that one only)" if others else "")
         + ". Never prefix your reply with your own name. "
         f"If you are shown only other AIs' replies and have nothing useful to add, "
-        f"reply with exactly {PASS}."
+        f"reply with exactly {PASS}. "
+        "If the user has to choose between a few options, end your reply with one line: "
+        "CHOICES: first option | second option (2 to 5 short options); they appear as buttons."
         + ad.intro_note
     )
 
@@ -1057,6 +1059,26 @@ def verdict(text):
     return found[-1].upper() if found else None
 
 
+MAX_CHOICES, MAX_CHOICE_LEN = 5, 80
+
+
+def split_choices(text):
+    """'…\nCHOICES: Yes | No | Show me first' at the end of a reply -> (text without that
+    line, ["Yes", "No", "Show me first"]); (text, None) if there's no valid choices line."""
+    lines = (text or "").rstrip().split("\n")
+    m = re.match(r"(?i)^choices\s*:\s*(.+)$", lines[-1].strip().strip("*`_ ").strip())
+    if not m:
+        return text, None
+    options = []
+    for o in m.group(1).split("|"):
+        o = o.strip().strip("*`_ \"'").strip()
+        if o and o.lower() not in (x.lower() for x in options):
+            options.append(o)
+    if not 2 <= len(options) <= MAX_CHOICES or any(len(o) > MAX_CHOICE_LEN for o in options):
+        return text, None
+    return "\n".join(lines[:-1]).rstrip(), options
+
+
 ROLE_VERB = {"plan": "planning", "work": "working", "test": "testing", "review": "reviewing"}
 
 
@@ -1177,6 +1199,9 @@ def ask(chat, bot, extra="", cap=None, role=None, stage="", force=False, race=Fa
         if diff:
             meta["diff"] = [diff.count("\n+") - diff.count("\n+++"),
                             diff.count("\n-") - diff.count("\n---")]
+        shown, choices = split_choices(reply) if outcome(reply) == "done" else (reply, None)
+        if choices and shown:  # (a reply that is only a choices line stays as it is)
+            reply, meta["choices"] = shown, choices
         idx = add_msg(chat, bot, reply, meta=meta)
         if diff and not chat.get("deleted"):
             os.makedirs(os.path.dirname(diff_path(chat["id"], idx)), exist_ok=True)
@@ -1663,6 +1688,52 @@ def post_copy_reply(chat, r, bot, name, reply, meta, markers=False):
             f.write(text[:MAX_DIFF])
 
 
+def human_size(n):
+    for unit in ("bytes", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:.0f} {unit}" if unit == "bytes" else f"{n:.1f} {unit}"
+        n /= 1024
+
+
+def bring_ignored(chat, r, c):
+    """Copy the user's git-ignored files (.env, node_modules, .venv…) into copy `c`, so tests
+    can run there (SPEC §14.5b). The first copy tells the chat what came along."""
+    try:
+        info = copies.copy_ignored(chat["folder"], c["folder"])
+    except OSError as e:
+        info = {"files": 0, "bytes": 0, "names": [], "skipped": [], "error": str(e)}
+    with lock:
+        first = "ignored" not in r
+        if first:
+            r["ignored"] = {k: info[k] for k in ("names", "skipped", "files", "bytes")}
+    if not first or not (info["names"] or info["skipped"]):
+        return
+    names = ", ".join(info["names"][:6]) + (f" and {len(info['names']) - 6} more"
+                                             if len(info["names"]) > 6 else "")
+    text = (f"Your git-ignored files were copied into each copy so tests can run there: {names} "
+            f"({info['files']} files, {human_size(info['bytes'])}). They stay out of what you Use."
+            if info["names"] else "")
+    if info["skipped"]:
+        text += (" " if text else "") + "Not copied (too big): " + skipped_text(info["skipped"]) + "."
+    add_msg(chat, "system", text)
+
+
+def skipped_text(skipped):
+    return ", ".join(f"{n} ({human_size(b) if b is not None else 'over ' + human_size(copies.MAX_IGNORED_BYTES)})"
+                     for n, b in skipped[:6]) + (f" and {len(skipped) - 6} more" if len(skipped) > 6 else "")
+
+
+def ignored_note(r):
+    """Told to agents in copies: ignored folders that were too big to copy."""
+    skipped = (r.get("ignored") or {}).get("skipped") or []
+    if not skipped:
+        return ""
+    return ("\n\n(Not in this copy because they're too big: " + skipped_text(skipped)
+            + ". The user's project has them but git ignores them. If you need them (e.g. "
+            "installed dependencies) install or build them here if your permissions allow; "
+            "otherwise say so.)")
+
+
 def open_copy(chat, r, name, agent_id, extra=None):
     """Make (or remake) copy `name` from the snapshot. -> its record, or None if the chat was
     deleted / the Race replaced meanwhile (then the copy is removed again)."""
@@ -1681,6 +1752,7 @@ def open_copy(chat, r, name, agent_id, extra=None):
     if chat.get("deleted") or chat.get("race") is not r:
         copies.remove_copies(r["root"], [path], [branch])
         return None
+    bring_ignored(chat, r, c)
     return c
 
 
@@ -1690,7 +1762,7 @@ def run_racer(chat, r, b, context, task):
         return
     others = names_of(chat, [x for x in r["racers"] if x != b]) or "the others"
     prompt = ((context + "\n\n") if context else "") + f"[User]: {task}" + \
-        RACE_NOTE.format(others=others, folder=c["folder"])
+        RACE_NOTE.format(others=others, folder=c["folder"]) + ignored_note(r)
     reply, meta = ask_copy(chat, b, c["folder"], prompt, "⚡ Race", "race", [r["msg"]])
     post_copy_reply(chat, r, b, b, reply, meta)
 
@@ -1715,7 +1787,8 @@ def race_test(chat, r):
                     or (only and name not in only):
                 continue
             before = copies.head(c["path"])
-            prompt = f"[User]: {task}" + RACE_TEST_NOTE.format(folder=c["folder"], name=c["name"])
+            prompt = f"[User]: {task}" + RACE_TEST_NOTE.format(folder=c["folder"], name=c["name"]) \
+                + ignored_note(r)
             reply, meta = ask_copy(chat, tester, c["folder"], prompt,
                                    f"Tester · {c['name']}'s copy", "test", [r["msg"]])
             meta["copy"] = name
@@ -1777,6 +1850,7 @@ def merge_into_result(chat, r, names, fixer):
         return None, str(e)
     c["folder"] = path if r["scope"] == "." else os.path.join(path, *r["scope"].split("/"))
     c["key"], c["conflicts"], c["merged_at"] = name, conflicts, copies.head(path)
+    bring_ignored(chat, r, c)
     return c, conflicts
 
 
@@ -1793,7 +1867,7 @@ def race_combine(chat, r):
     prompt = f"[User]: {task}" + COMBINE_NOTE.format(
         names=c["label"], folder=c["folder"],
         conflicts=f"; these files still have conflict markers: {', '.join(conflicts)}"
-        if conflicts else " without conflicts")
+        if conflicts else " without conflicts") + ignored_note(r)
     reply, meta = ask_copy(chat, fixer, c["folder"], prompt, "⚡ Combine", "combine", [])
     post_copy_reply(chat, r, fixer, c["key"], reply, meta, markers=True)
 
@@ -2091,7 +2165,7 @@ def run_part(chat, r, b, context, task):
         return
     others = "; ".join(f"{display(chat, x)}: {t}" for x, t in r["parts"].items() if x != b) or "none"
     prompt = ((context + "\n\n") if context else "") + f"[User]: {task}" + \
-        SPLIT_PART_NOTE.format(part=r["parts"][b], others=others, folder=c["folder"])
+        SPLIT_PART_NOTE.format(part=r["parts"][b], others=others, folder=c["folder"]) + ignored_note(r)
     reply, meta = ask_copy(chat, b, c["folder"], prompt, "🧩 Part", "part", [r["msg"]])
     post_copy_reply(chat, r, b, b, reply, meta)
 
@@ -2131,7 +2205,7 @@ def split_merge(chat, r):
         return "stopped"
     if conflicts:
         prompt = f"[User]: {chat['messages'][r['msg']]['text']}" + SPLIT_MERGE_NOTE.format(
-            parts=c["label"], folder=c["folder"], conflicts=", ".join(conflicts))
+            parts=c["label"], folder=c["folder"], conflicts=", ".join(conflicts)) + ignored_note(r)
         reply, meta = ask_copy(chat, c["agent"], c["folder"], prompt, "🧩 Merge", "combine", [])
         post_copy_reply(chat, r, c["agent"], c["key"], reply, meta, markers=True)
         if c["status"] != "done":
@@ -2157,7 +2231,8 @@ def split_check_result(chat, r):
     for tester in [b for b in stage_agents(chat, "test") if b not in r["parts"]][:1]:
         before = copies.head(c["path"])
         reply, meta = ask_copy(chat, tester, c["folder"], f"[User]: {task}" +
-                               SPLIT_TEST_NOTE.format(folder=c["folder"]), "Tester · 🧩 Split", "test", [r["msg"]])
+                               SPLIT_TEST_NOTE.format(folder=c["folder"]) + ignored_note(r),
+                               "Tester · 🧩 Split", "test", [r["msg"]])
         copies.save_copy(c["path"], "tests")
         changed = [p for _, p in copies.name_status(c["path"], before, "HEAD")]
         other = [f for f in changed if not is_test_file(f)]
@@ -2448,6 +2523,8 @@ def export_md(chat):
         r = (m.get("meta") or {}).get("role")
         role = " (chat summary)" if r == "summary" else f" ({r})" if r else ""
         out += [f"## {names.get(m['who'], m['who'])}{role} · {when}", "", m["text"], ""]
+        if (m.get("meta") or {}).get("choices"):
+            out += ["Choices: " + " · ".join(f"[{o}]" for o in m["meta"]["choices"]), ""]
     return "\n".join(out)
 
 

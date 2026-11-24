@@ -193,6 +193,10 @@ until you press **Use this one**.
 - **Each copy starts from your folder exactly as it is now**, uncommitted and new files included.
   Every agent works in a fresh session in its copy, given the chat so far (or one shared summary of
   a long chat).
+- **Your git-ignored files come along** (`.env`, `node_modules`, `.venv`…), copied into each copy so
+  tests can run there. Caches and build output are skipped, and past 500 MB per copy the rest is left
+  out: the chat says what was copied and what wasn't. They stay ignored, so **Use this one** never
+  brings them back.
 - **Use this one** puts the changes into your folder **uncommitted**, byte for byte. If you edited
   the same lines meanwhile, it refuses and names the files; edits on different lines are merged.
   It never overwrites a file your git ignores, and if anything fails half-way, your folder is put
@@ -272,6 +276,12 @@ documents for sandboxing tools. The page notices within about a minute.
   (each stays quiet if it has nothing to add). **Hand-offs**: an agent that addresses another
   (`@codex …`, `Claude 2, can you …`) gets an answer from it.
 - **Skills**: type `/` for the skills your agents have; a skill runs on the agents that have it.
+- **🔔 Notifications**: turn them on in the chat's header to get a sound and a desktop notification
+  when the agents finish, a plan waits for your OK, or a Race is done, while the tab is in the
+  background. The tab title counts new replies, e.g. `(2) Group Chat`, and other chats with new
+  messages get a ● in the sidebar.
+- **Decision buttons**: when an agent needs you to choose, it offers its options as buttons under its
+  reply (it ends the reply with `CHOICES: Fast | Safe`). A click answers that agent only.
 - **Live preview, reply stats** (time, ≈ cost, tokens, files changed), **↻ Retry** for failed
   replies, **↩ Reply** to one agent, **Markdown** with Copy buttons, **Export** as Markdown.
 - **Continue in a terminal**: the bottom of each chat shows `claude -r <id>`, `codex resume <id>`
@@ -288,7 +298,7 @@ teams). Deleting a chat on the page doesn't delete the agents' own sessions.
 ## Development
 
 ```bash
-python3 -m unittest discover -s tests -t .    # ~260 tests, under a minute, no AI calls
+python3 -m unittest discover -s tests -t .    # ~275 tests, under a minute, no AI calls
 python3 -m agent_groupchat --no-browser       # run from the source folder
 ```
 

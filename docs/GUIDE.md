@@ -57,6 +57,10 @@ Which AI for which role:
   fresh sessions.
 - **Keep going in a terminal**: the bottom of the chat shows the command to resume each agent's
   session.
+- **Doing something else meanwhile?** Press **🔔** in the chat's header: you get a sound and a
+  notification when the agents finish or need you, and the tab title shows how many replies came in.
+- **When an agent offers buttons** under its reply, a click answers that agent; you can still type
+  anything else instead.
 
 ## 4. Spend less
 
@@ -79,6 +83,8 @@ Which AI for which role:
 | API **Test**: *The environment variable GEMINI_API_KEY isn't set.* | Set it (see [Add an AI with an API key](../README.md#add-an-ai-with-an-api-key)) and **restart** agent-groupchat from a terminal that has it. |
 | API **Test**: *Can't reach …: HTTP Error 401* | The key is wrong or expired; check it with the provider. |
 | API **Test**: *Reached the API, but it has no model 'x'.* | Copy the exact model name from the provider's model list. |
+| In a Race/Split: *Not copied (too big): node_modules (over 500 MB)* | Copies get your git-ignored files up to 500 MB. Agents are told what's missing: allow them to install it in their copy (Edit + run commands), or use a normal message instead. |
+| 🔔 is on but no desktop notification appears | The browser blocked them for this page: allow notifications for `127.0.0.1` in its site settings. The sound and the `(1)` in the tab title still work. |
 | ⚡ Race / 🧩 Split are greyed out | They need a git repo (the page offers **Initialize git here**) and 2+ agents that can edit (Leads, or agents without a role). |
 | ⚠ *changed files although its permission is …* under a reply | An agent changed files it shouldn't have. Check ▸ Diff and undo with git if needed. |
 | An agent shows ⏳ *waiting for its turn to edit* | Normal: agents that edit take turns. |

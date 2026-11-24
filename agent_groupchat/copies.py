@@ -8,6 +8,8 @@ only its working tree changes (nothing is committed or staged for them).
                           folder, made with a temporary index (theirs stays as it is)
   unsafe_links(...)       symlinks in the snapshot that point outside the project
   make_copy(...)          a worktree on its own branch, starting from that snapshot
+  copy_ignored(...)       copy the user's git-ignored files (.env, node_modules, .venv…) into a
+                          copy, so tests can run there; they stay ignored, so they never come back
   save_copy(copy)         commit what the agent did in its copy
   use_copy(...)           put a copy's changes into the user's folder, byte-exact and
                           uncommitted; files both sides changed are merged line by line, and
@@ -220,6 +222,81 @@ def make_copy(root, base, path, branch, scope="."):
     folder = path if scope == "." else os.path.join(path, *scope.split("/"))
     os.makedirs(folder, exist_ok=True)
     return folder
+
+
+# Git-ignored things never copied: caches and build output (re-made when needed).
+IGNORED_SKIP = {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".cache", ".tox",
+                ".nox", ".hypothesis", "dist", "build", "target", ".next", ".nuxt", ".turbo",
+                ".parcel-cache", ".gradle", "coverage", "htmlcov", ".DS_Store", "Thumbs.db"}
+MAX_IGNORED_BYTES = 500 * 1024 ** 2  # per copy: bigger ignored folders are left out (and named)
+MAX_IGNORED_FILES = 60_000
+
+
+def _size(path, limit_bytes, limit_files):
+    """(bytes, files) of a file or folder, without following symlinks; bytes is None when
+    it stopped counting because it went past a limit."""
+    st = os.lstat(path)
+    if not stat.S_ISDIR(st.st_mode):
+        return st.st_size, 1
+    total, n = 0, 0
+    for top, dirs, files in os.walk(path):
+        dirs[:] = [d for d in dirs if d not in IGNORED_SKIP]
+        for f in files + [d for d in dirs if os.path.islink(os.path.join(top, d))]:
+            if f in IGNORED_SKIP:
+                continue
+            try:
+                total += os.lstat(os.path.join(top, f)).st_size
+            except OSError:
+                continue
+            n += 1
+            if total > limit_bytes or n > limit_files:
+                return None, n  # past the limit: stopped counting
+    return total, n
+
+
+def copy_ignored(src, dest, max_bytes=None, max_files=None):
+    """Copy the git-ignored files and folders of the user's folder `src` into the copy's
+    folder `dest` (real copies, so an agent can't change the user's files through them).
+    Caches and build output are skipped; whatever would go past the size limits is left out.
+    -> {"files", "bytes", "names": [copied], "skipped": [[name, bytes or None (= huge)]]}."""
+    max_bytes = MAX_IGNORED_BYTES if max_bytes is None else max_bytes
+    max_files = MAX_IGNORED_FILES if max_files is None else max_files
+    out = {"files": 0, "bytes": 0, "names": [], "skipped": []}
+    try:
+        raw = git_bytes(src, "ls-files", "-z", "--others", "--ignored", "--exclude-standard",
+                        "--directory")
+    except GitError:
+        return out
+    entries = sorted(x.decode("utf-8", "surrogateescape").rstrip("/") for x in raw.split(b"\0") if x)
+    for rel in entries:
+        if any(part in IGNORED_SKIP for part in rel.split("/")):
+            continue
+        s = os.path.join(src, *rel.split("/"))
+        d = os.path.join(dest, *rel.split("/"))
+        if not os.path.lexists(s) or os.path.lexists(d):
+            continue
+        try:
+            size, n = _size(s, max_bytes - out["bytes"], max_files - out["files"])
+        except OSError:
+            continue
+        if not n:  # an empty folder (or only caches): nothing worth copying
+            continue
+        if size is None or out["bytes"] + size > max_bytes or out["files"] + n > max_files:
+            out["skipped"].append([rel, size])  # size None: more than the limit
+            continue
+        try:
+            os.makedirs(os.path.dirname(d), exist_ok=True)
+            if os.path.isdir(s) and not os.path.islink(s):
+                shutil.copytree(s, d, symlinks=True, ignore=shutil.ignore_patterns(*IGNORED_SKIP))
+            else:
+                shutil.copy2(s, d, follow_symlinks=False)
+        except (OSError, shutil.Error):
+            out["skipped"].append([rel, size])
+            continue
+        out["files"] += n
+        out["bytes"] += size
+        out["names"].append(rel)
+    return out
 
 
 def head(path):

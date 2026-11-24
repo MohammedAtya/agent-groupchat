@@ -244,6 +244,19 @@ roles are warned about under the agents table (§4.4).
 ### 7.3 In the chat
 Each agent shows a badge with its name, role(s), permission level, and ⚠ if raised. 🔒 Talk-only lock button in the header.
 
+### 7.4 Notifications and decision buttons
+- **🔔 in the header** (off by default, remembered in the browser): while the tab is in the background, a short
+  sound plus a desktop notification when the open chat's turn ends ("Claude and Codex replied", "…asked you to
+  choose", "Failed: …"), a plan waits for **Go ahead**, Split parts wait for an OK, or a Race is done. Turning it on
+  asks the browser's permission; if notifications are blocked, the sound and tab title still work.
+- **Tab title** counts replies that arrived while the tab was in the background: `(2) Group Chat` (always on).
+- **Sidebar:** other chats with messages since you last opened them get a ● and bold title.
+- **Decision buttons:** agents are told they may end a reply with one line `CHOICES: a | b | c` (2–5 options, each
+  up to 80 characters). The server removes that line from the reply and keeps the options (`meta.choices`); the page
+  shows them as buttons under that reply until you send your next message. A click sends `@agent option`, so it
+  answers that agent only, like **↩ Reply**. An invalid line (1 or 6+ options, too long) stays as plain text; Export
+  lists the options. Race/Split copy replies don't get buttons.
+
 ---
 
 ## 8. Storage
@@ -372,6 +385,14 @@ Two ways for agents that can edit to work **at the same time**, each in **its ow
   that restores it.
 - **Submodules aren't copied** (they're empty in the copies); the chat says so when a Race/Split starts.
 - Projects with **symlinks that lead outside them** can't use Race/Split.
+- **Git-ignored files** (`.env`, `node_modules`, `.venv`, local configs) aren't in the snapshot, so each new copy
+  (racers, parts, and the merged/combined result) gets them copied in: real copies, never links, so an agent can't
+  change the user's files through them; symlinks among them are copied as links, not followed. Skipped: caches and
+  build output (`__pycache__`, `.pytest_cache`, `dist`, `build`, `target`, `.next`…) and empty folders. Limit per
+  copy: 500 MB / 60,000 files; an entry that would go past it is left out. The first copy posts one note listing
+  what was copied and what was left out (with sizes, or "over 500 MB"), and the agents and Testers in copies are
+  told what's missing so they can install it or say so. The files stay ignored in the copy, so they're never part
+  of what **Use this one** applies.
 
 ### 14.6 Sessions inside copies
 Claude Code and Gemini CLI keep sessions **per folder**, so an agent's chat session can't simply continue inside a

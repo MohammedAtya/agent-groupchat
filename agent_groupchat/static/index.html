@@ -47,6 +47,14 @@
   .chip b { color:var(--c, #888); font-weight:600; } .chip .lv { color:var(--muted); }
   .chip .up { color:var(--warn); font-weight:600; } .chip .lim { color:#c33; }
   #lockBtn.on { background:#fde2e1; color:#8a1c17; border-color:#e5a3a0; }
+  #notifyBtn.on { border-color:var(--user); }
+  .choices { margin-top:7px; display:flex; gap:6px; flex-wrap:wrap; }
+  .choices button { font-size:12px; padding:3px 11px; border-radius:14px; cursor:pointer;
+                    border:1px solid var(--c, var(--border)); background:var(--panel); color:var(--text); }
+  .choices button:hover:not(:disabled) { background:var(--hover); }
+  .choices button:disabled { opacity:.5; cursor:default; }
+  .item.unread .t { font-weight:700; }
+  .item.unread .t::before { content:'● '; color:var(--user); }
   #flowbar { display:flex; gap:10px; align-items:center; justify-content:center; padding:6px 16px;
              font-size:13px; background:#eaf2ff; color:#1d3d7a; border-top:1px solid #cddcf7; }
   #flowbar button { background:var(--user); color:#fff; border:0; border-radius:8px; padding:4px 12px;
@@ -263,6 +271,7 @@
     </div>
     <button class="small" id="teamBtn" title="Roles and permissions of the agents in this chat">Team</button>
     <button class="small" id="lockBtn" title="Talk-only lock: every agent may only talk (no files, no commands)">🔓 Lock</button>
+    <button class="small" id="notifyBtn">🔕</button>
     <span class="ctl">Discussion
       <select id="rounds"><option value="0">Off</option><option value="1">1 round</option>
         <option value="2">2 rounds</option><option value="3">3 rounds</option></select>
@@ -505,9 +514,15 @@ async function loadList() {
   $('warn').hidden = !help || (!pf.native_windows &&
     (!current || !Object.values(perm).some(p => p.limited && !p.locked)));
   const list = $('list'); list.innerHTML = '';
+  const seen = loadSeen();
+  for (const c of d.chats) if (!(c.id in seen) || c.id === current) seen[c.id] = c.updated;
+  for (const id of Object.keys(seen)) if (!d.chats.some(c => c.id === id)) delete seen[id];
+  saveSeen(seen);
   for (const c of d.chats) {
     const el = document.createElement('div');
-    el.className = 'item' + (c.id === current ? ' active' : '');
+    const fresh = c.id !== current && c.updated > seen[c.id] + 0.5;
+    el.className = 'item' + (c.id === current ? ' active' : '') + (fresh ? ' unread' : '');
+    if (fresh) el.title = 'New messages since you last looked';
     const t = document.createElement('div'); t.className = 't'; t.textContent = c.title;
     const s = document.createElement('div'); s.className = 's';
     s.innerHTML = `<span class="badge ${c.lock ? '' : 'work'}">${c.lock ? '🔒 locked' : c.agents + ' agents'}</span> `;
@@ -535,6 +550,7 @@ async function refresh() {
   try { c = await api('/api/chats/' + current); }
   catch (e) { $('typing').textContent = 'Server not reachable…'; return; }
   if (c.error) { current = null; return; }
+  needsYou(c);
   $('title').textContent = c.title;
   $('folder').textContent = c.folder;
   chat = c; agentList = c.agents || []; colors = c.colors || {}; aliasMap = c.aliases || {};
@@ -566,6 +582,8 @@ async function refresh() {
       const e = document.createElement('div'); e.className = 'empty';
       e.textContent = `Say hi to ${listNames(agentList.map(a => a.id))} 👋`; inner.append(e);
     }
+    let lastUser = -1;
+    c.messages.forEach((m, i) => { if (m.who === 'user') lastUser = i; });
     c.messages.forEach((m, idx) => {
       if (m.hidden) return;
       if (m.who === 'system') {  // short notes: "You used Codex's copy…"
@@ -587,6 +605,7 @@ async function refresh() {
       if (m.who === 'user') b.textContent = m.text;          // your messages stay plain text
       else { b.className = 'md'; b.innerHTML = md(m.text); } // AI replies: Markdown
       d.append(w, b);
+      if (m.who !== 'user' && meta.choices && idx > lastUser) d.append(choiceButtons(m));
       if (m.who === 'user' && m.status) d.append(statusLine(m.status));
       const info = metaLine(meta);
       if (info) { const x = document.createElement('div'); x.className = 'meta'; x.textContent = info; d.append(x); }
@@ -703,6 +722,21 @@ function statusLine(status) {
     sp.textContent = `${names[b] || b} ${ST[st] || st}`; x.append(sp);
   }
   return x;
+}
+function choiceButtons(m) {  // CHOICES: an agent offered options; a click answers that agent only
+  const box = document.createElement('div'); box.className = 'choices';
+  for (const o of m.meta.choices) {
+    const bt = document.createElement('button'); bt.type = 'button'; bt.textContent = o;
+    bt.title = `Answer ${names[m.who] || m.who}: "${o}"`;
+    bt.onclick = async () => {
+      box.querySelectorAll('button').forEach(x => { x.disabled = true; });
+      const r = await api(`/api/chats/${current}/send`, {text: `@${m.who} ${o}`});
+      if (r.error) { alert(r.error); box.querySelectorAll('button').forEach(x => { x.disabled = false; }); return; }
+      lastSig = ''; refresh(); loadList();
+    };
+    box.append(bt);
+  }
+  return box;
 }
 let openDiffs = new Set(); const diffCache = {};
 function actions(m, idx, failed) {
@@ -1386,6 +1420,86 @@ $('legacyNo').onclick = async () => { await api('/api/legacy', {action: 'dismiss
   const pick = list.find(c => c.id === last) || list[0];
   if (pick) openChat(pick.id);
 })();
+// ---- notifications: tell the user when the open chat finishes or needs them (SPEC §7.4)
+const BASE_TITLE = document.title;
+let notifyOn = false, unread = 0;
+const watched = {};  // chat id -> what refresh() saw last time
+try { notifyOn = localStorage.getItem('gc-notify') === 'on'; } catch (e) {}
+function loadSeen() { try { return JSON.parse(localStorage.getItem('gc-seen') || '{}') || {}; } catch (e) { return {}; } }
+function saveSeen(x) { try { localStorage.setItem('gc-seen', JSON.stringify(x)); } catch (e) {} }
+function showNotifyBtn() {
+  const b = $('notifyBtn'), blocked = 'Notification' in window && Notification.permission === 'denied';
+  b.textContent = notifyOn ? '🔔' : '🔕'; b.classList.toggle('on', notifyOn);
+  b.title = notifyOn
+    ? 'Notifications on: a sound and a desktop notification when the agents finish or need you, ' +
+      'while this tab is in the background. Click to turn off.' +
+      (blocked ? '\nDesktop notifications are blocked for this page in the browser settings: you get the sound and the (1) in the tab title.' : '')
+    : 'Notify me (sound + desktop notification) when the agents finish or need me, while this tab is in the background';
+}
+$('notifyBtn').onclick = async () => {
+  notifyOn = !notifyOn;
+  try { localStorage.setItem('gc-notify', notifyOn ? 'on' : 'off'); } catch (e) {}
+  if (notifyOn && 'Notification' in window && Notification.permission === 'default') {
+    try { await Notification.requestPermission(); } catch (e) {}
+  }
+  if (notifyOn) chime();  // a sample (and browsers only allow sound after a click on the page)
+  showNotifyBtn();
+};
+showNotifyBtn();
+const away = () => document.hidden || !document.hasFocus();
+function setUnread(n) { unread = n; document.title = (n ? `(${n}) ` : '') + BASE_TITLE; }
+window.addEventListener('focus', () => setUnread(0));
+document.addEventListener('visibilitychange', () => { if (!document.hidden) setUnread(0); });
+function chime() {
+  try {
+    const a = new (window.AudioContext || window.webkitAudioContext)(), t = a.currentTime;
+    for (const [f, at] of [[660, 0], [880, 0.13]]) {
+      const o = a.createOscillator(), g = a.createGain();
+      o.frequency.value = f; g.gain.setValueAtTime(0.0001, t + at);
+      g.gain.exponentialRampToValueAtTime(0.12, t + at + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + at + 0.35);
+      o.connect(g).connect(a.destination); o.start(t + at); o.stop(t + at + 0.4);
+    }
+    setTimeout(() => a.close(), 800);
+  } catch (e) {}
+}
+function notify(title, body) {
+  if (!notifyOn) return;
+  chime();
+  if ('Notification' in window && Notification.permission === 'granted') {
+    try {
+      const n = new Notification(title, {body, tag: 'agent-groupchat'});
+      n.onclick = () => { window.focus(); n.close(); };
+    } catch (e) {}
+  }
+}
+function needsYou(c) {  // what changed since the last refresh -> tab title count + a notification
+  const r = c.race || {}, prev = watched[c.id];
+  const st = {busy: !!c.busy, n: c.messages.length, wait: !!(c.flow && c.flow.waiting),
+              split: r.kind === 'split' && r.stage === 'await', race: r.stage === 'done'};
+  st.from = !st.busy ? null : prev && prev.busy ? prev.from : prev ? prev.n : st.n;
+  watched[c.id] = st;
+  if (!prev) return;  // just opened: nothing is new
+  const replies = m => m.who !== 'user' && m.who !== 'system' && !m.hidden;
+  const fresh = c.messages.slice(prev.n).filter(replies);
+  if (fresh.length && away()) setUnread(unread + fresh.length);
+  let why = '';
+  if (st.wait && !prev.wait) why = '⏸️ A plan is ready: go ahead, or reply to change it.';
+  else if (st.split && !prev.split) why = '⏸️ The parts are ready for your OK.';
+  else if (st.race && !prev.race) why = '⚡ The Race is done: pick a copy.';
+  else if (prev.busy && !st.busy) {
+    const done = c.messages.slice(prev.from ?? prev.n).filter(replies);
+    if (done.length) {
+      const who = [...new Set(done.map(m => m.who))];
+      const failed = done.filter(m => /^\((error|timed out)/.test(m.text)).map(m => names[m.who] || m.who);
+      const asks = done.some(m => (m.meta || {}).choices);
+      why = `${listNames(who)} replied` + (asks ? ' and asked you to choose' : '') + '.' +
+            (failed.length ? ` Failed: ${[...new Set(failed)].join(', ')}.` : '');
+    }
+  }
+  if (why && away()) notify(c.title, why);
+}
+
 setInterval(() => { refresh(); }, 1000);
 setInterval(() => { loadList(); }, 5000);
 setInterval(() => { loadSkills(); }, 60000);
