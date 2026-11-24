@@ -50,7 +50,7 @@ def main():
         with urllib.request.urlopen(base + "/api/chats", timeout=5) as r:
             listing = json.load(r)
         ids = [a["id"] for a in listing["adapters"]]
-        assert ids[:4] == ["claude", "codex", "gemini", "aider"], ids
+        assert ids[:5] == ["claude", "codex", "antigravity", "gemini", "aider"], ids
         assert os.path.isdir(os.path.join(data, "chats")), "no data folder was made"
         print(f"OK: page and API answer on {base} ({len(page)} bytes; adapters {ids})")
     finally:

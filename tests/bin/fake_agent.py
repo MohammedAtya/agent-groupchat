@@ -32,6 +32,11 @@ if (style == "claude" and argv and argv[-1] != "--" and "--" not in argv) or \
         (style == "codex" and argv[-1:] == ["-"]) or (style == "gemini" and argv[-1:] == [" "]):
     stdin_text = sys.stdin.read()  # a long prompt came on standard input
     prompt = stdin_text + (argv[-1] if style == "gemini" else "")
+if style == "antigravity":  # the prompt is attached: --print=<text>, or NDJSON on stdin
+    prompt = argv[-1][len("--print="):]
+    if argv[-1] == "--print=":
+        stdin_text = sys.stdin.read()
+        prompt = json.loads(stdin_text)["message"]["content"]
 if style == "aider":  # the message is in a file
     with open(argv[argv.index("--message-file") + 1], encoding="utf-8") as f:
         prompt = f.read()
@@ -96,6 +101,39 @@ if style == "gemini":
               "delta": True})
     emit({"type": "result", "status": "success",
           "stats": {"input_tokens": 30, "output_tokens": 4, "total_tokens": 34}})
+    sys.exit(0)
+
+if style == "antigravity":
+    cid = argv[argv.index("--conversation") + 1] if "--conversation" in argv else str(uuid.uuid4())
+    emit({"event": "init", "conversation_id": cid, "init": {"cwd": os.getcwd(), "tools": []}})
+    if rule.get("exit"):
+        print("fake failure", file=sys.stderr)
+        emit({"event": "result", "result": {"conversation_id": cid, "status": "ERROR",
+                                            "response": "", "error": "quota exceeded"}})
+        sys.exit(rule["exit"])
+    if rule.get("needs_approval"):  # like agy when a tool needs a prompt it can't show
+        print('jetski: no output produced — a tool required the "command" permission that '
+              "headless mode cannot prompt for, so it was auto-denied.", file=sys.stderr)
+        emit({"event": "result", "result": {"conversation_id": cid, "status": "SUCCESS",
+                                            "response": ""}})
+        sys.exit(0)
+
+    def step(i, **kw):
+        emit({"event": "step_update", "step_update": {"conversation_id": cid, "step_index": i, **kw}})
+    step(0, state="DONE", step_type="user_input")
+    if rule.get("filler"):  # a "let me look" message before the tools
+        step(1, state="ACTIVE", step_type="agent_response", text_delta=rule["filler"])
+    for p in writes:
+        info = {"name": "write_file", "parameters": {"Path": os.path.abspath(p)}}
+        step(2, state="ACTIVE", step_type="tool", tool_name="write_file", tool_info=info)
+        step(2, state="DONE", step_type="tool", tool_name="write_file", tool_info=info)
+    for i, w in enumerate(reply.split(" ")):
+        step(3, state="ACTIVE", step_type="agent_response", text_delta=(" " if i else "") + w)
+    full = (rule.get("filler", "") + "\n" if rule.get("filler") else "") + reply
+    emit({"event": "result", "result": {"conversation_id": cid, "status": "SUCCESS",
+                                        "response": full + "\n",
+                                        "usage": {"input_tokens": 30, "output_tokens": 4,
+                                                  "cache_read_tokens": 70}}})
     sys.exit(0)
 
 if style == "aider":  # plain-text output; the reply goes to its chat-history file

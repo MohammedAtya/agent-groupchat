@@ -3,7 +3,8 @@
 [![tests](https://github.com/MohammedAtya/agent-groupchat/actions/workflows/tests.yml/badge.svg)](https://github.com/MohammedAtya/agent-groupchat/actions/workflows/tests.yml)
 
 **A group chat between you and your AI agents, running on your own computer.** Bring the AIs you
-already have (Claude Code, Codex, Gemini CLI, Aider, or any OpenAI-compatible chat API), run
+already have (Claude Code, Codex, Gemini via Antigravity or the Gemini CLI, Aider, or any
+OpenAI-compatible chat API), run
 several copies of the same one, and give each a **role** with **permissions its CLI really
 enforces**.
 
@@ -34,8 +35,9 @@ agent-groupchat                   # opens http://127.0.0.1:8765 in your browser
 ```
 
 You also need at least one AI: a CLI you're already logged into ([Claude Code](https://code.claude.com/docs/en/overview),
-[Codex CLI](https://github.com/openai/codex), [Gemini CLI](https://github.com/google-gemini/gemini-cli),
-[Aider](https://aider.chat)) or a chat API (see [Agents](#agents)).
+[Codex CLI](https://github.com/openai/codex), [Antigravity](https://antigravity.google) (`agy`, for Gemini),
+[Gemini CLI](https://github.com/google-gemini/gemini-cli),
+[Aider](https://aider.chat)) or an API key for a chat API (see [Agents](#agents)).
 
 From source: `git clone https://github.com/MohammedAtya/agent-groupchat && cd agent-groupchat && python3 -m agent_groupchat`.
 
@@ -53,32 +55,91 @@ one; if agent-groupchat is already running, it just opens it. Stop it with Ctrl+
 4. While they work you see what each one is doing (`✏️ editing app.py`, `$ pytest`). **■ Stop**
    ends the turn; **▸ Diff** under a reply shows exactly what it changed.
 
+**New here?** The [user guide](https://github.com/MohammedAtya/agent-groupchat/blob/main/docs/GUIDE.md)
+has ready-made team setups, everyday tips and fixes for common problems.
+
 ## Agents
 
 | AI | What you need | Permission levels it can enforce |
 |---|---|---|
 | Claude Code | `claude`, logged in | all five |
 | Codex CLI | `codex`, logged in | Talk*, Read, Edit + run commands, Auto |
-| Gemini CLI | `gemini`, logged in | Talk, Read, Edit, Edit + run commands (needs Docker/Podman; Seatbelt on macOS) |
+| Antigravity (Gemini) | `agy`, logged in | Talk, Read, Edit |
+| Gemini CLI | `gemini`, logged in (Google no longer serves it to personal accounts: use Antigravity) | Talk, Read, Edit, Edit + run commands (needs Docker/Podman; Seatbelt on macOS) |
 | Aider | `aider` + a model name (e.g. `sonnet`) | Talk*, Read, Edit |
 | Chat API | an OpenAI-compatible endpoint | Talk only (it sees the chat, not your files) |
 
 \* can't be stopped from reading files: it stays read-only and is told to only discuss.
 
-**⚙ Settings → Agents** shows which CLIs are installed (with a **Test** button) and lets you add
-chat APIs: OpenAI, Ollama, OpenRouter, Groq, LM Studio… They're saved in
-`~/.agent-groupchat/config.json`:
+### Add an agent (a CLI)
+
+1. Install the CLI and **log in once in a terminal** (run `claude`, `codex`, `agy`, `gemini`…
+   and sign in). agent-groupchat uses that login; it never asks for your password.
+2. Start `agent-groupchat` from a terminal where that command works: it finds CLIs on your `PATH`.
+3. **⚙ Settings → Agents** lists every CLI it found. **Test** checks the CLI runs (it doesn't
+   check the login, so do step 1 first). In the AI menu of New chat, a missing one says
+   *(not installed)*.
+4. **+ New chat → + Add agent**, pick the AI, and give it roles. Add the same AI twice for two
+   independent copies (*Claude 1*, *Claude 2*), each with its own model if you like.
+
+A chat's agents are fixed when it's created: to change *who* is in it, start a new chat (save
+the old setup with **💾 Save as team** first). Roles, focus and permissions can be changed any
+time under **Team**.
+
+### Add an AI with an API key
+
+Any OpenAI-compatible chat API works: OpenAI, Gemini, OpenRouter, Groq, Mistral, or a local
+server (Ollama, LM Studio). It can only **talk** (it sees the chat, not your files), so it fits
+roles like Planner, Critic or a second opinion.
+
+1. **Put the key in an environment variable.** The app never stores your key; it reads it from
+   the variable you name:
+
+   | OS | Command |
+   |---|---|
+   | Linux (bash) | `echo 'export GEMINI_API_KEY="your-key"' >> ~/.bashrc && source ~/.bashrc` |
+   | macOS (zsh) | `echo 'export GEMINI_API_KEY="your-key"' >> ~/.zshrc && source ~/.zshrc` |
+   | Windows | `setx GEMINI_API_KEY "your-key"`, then open a new terminal |
+
+2. **Restart agent-groupchat from that terminal.** It reads environment variables when it starts,
+   so a running copy won't see a new key (stop it with Ctrl+C, or `pkill -f bin/agent-groupchat`).
+3. **⚙ Settings → Agents → + Add chat API**, fill in the row, **Save**, then **Test**:
+
+   | Field | Example |
+   |---|---|
+   | Id | `gemini-api` (lowercase; not a built-in id like `gemini` or `antigravity`) |
+   | Name | `Gemini`: what the agent is called in chats |
+   | Address (base URL) | from the table below |
+   | Model | a model name from the provider's current list, e.g. `gemini-2.5-flash` |
+   | Key: environment variable name | `GEMINI_API_KEY`: the variable's **name**, never the key (Settings refuses a value that looks like a key) |
+
+4. It now appears in the AI menu of **+ New chat**.
+
+| Provider | Base URL | Key |
+|---|---|---|
+| OpenAI | `https://api.openai.com/v1` | `OPENAI_API_KEY` |
+| Google Gemini | `https://generativelanguage.googleapis.com/v1beta/openai/` | `GEMINI_API_KEY` |
+| OpenRouter | `https://openrouter.ai/api/v1` | `OPENROUTER_API_KEY` |
+| Groq | `https://api.groq.com/openai/v1` | `GROQ_API_KEY` |
+| Mistral | `https://api.mistral.ai/v1` | `MISTRAL_API_KEY` |
+| Ollama (local) | `http://localhost:11434/v1` | none: leave it empty |
+| LM Studio (local) | `http://localhost:1234/v1` | none: leave it empty |
+
+**Gemini three ways:** *Antigravity* (`agy`) and *Gemini CLI* use your Google login and can work
+on files; a *Gemini* chat API uses an API key and only talks. They have different names and ids,
+so you can have all three in one chat.
+
+The APIs are saved in `~/.agent-groupchat/config.json` (you can also edit it by hand):
 
 ```json
 {"apis": [
-  {"id": "llama", "name": "Llama", "base_url": "http://localhost:11434/v1", "model": "llama3.1"},
-  {"id": "gpt", "name": "GPT", "base_url": "https://api.openai.com/v1", "model": "gpt-4.1",
-   "key_env": "OPENAI_API_KEY"}
+  {"id": "gemini-api", "name": "Gemini", "model": "gemini-2.5-flash",
+   "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/", "key_env": "GEMINI_API_KEY"},
+  {"id": "llama", "name": "Llama", "base_url": "http://localhost:11434/v1", "model": "llama3.1"}
 ]}
 ```
 
-`key_env` is the **name** of the environment variable holding the API key. The key itself is never
-stored, and Settings refuses a value that looks like a key.
+### Aider
 
 Aider runs with every prompt answered automatically, so everything risky it would agree to is
 switched off: shell commands, git commits, `.gitignore` edits, self-updates. Its history files live
@@ -143,13 +204,13 @@ until you press **Use this one**.
 
 ## Permissions
 
-| Permission | Claude Code | Codex | Gemini CLI | Aider | Chat API |
-|---|---|---|---|---|---|
-| Talk only | no tools at all | read-only sandbox, told to only discuss | every tool denied | ask mode, told to only discuss | ✓ |
-| Read | read/search tools, `git diff/log/status`, tests (in the sandbox) | read-only sandbox | read/search tools | ask mode | – |
-| Edit files | edit tools in the folder, **no** commands | – | `auto_edit`: edits, no shell | code mode, no shell, no commits | – |
-| Edit + run commands | edits + commands, sandboxed to the folder | `workspace-write` sandbox | `yolo` inside Gemini's sandbox | – | – |
-| Auto | auto mode: a classifier blocks risky actions | "approve for me": an automatic reviewer | – | – | – |
+| Permission | Claude Code | Codex | Antigravity | Gemini CLI | Aider | Chat API |
+|---|---|---|---|---|---|---|
+| Talk only | no tools at all | read-only sandbox, told to only discuss | file, command, MCP and web-page tools denied | every tool denied | ask mode, told to only discuss | ✓ |
+| Read | read/search tools, `git diff/log/status`, tests (in the sandbox) | read-only sandbox | writes, commands and MCP tools denied | read/search tools | ask mode | – |
+| Edit files | edit tools in the folder, **no** commands | – | edits in the folder; commands and MCP tools denied | `auto_edit`: edits, no shell | code mode, no shell, no commits | – |
+| Edit + run commands | edits + commands, sandboxed to the folder | `workspace-write` sandbox | – | `yolo` inside Gemini's sandbox | – | – |
+| Auto | auto mode: a classifier blocks risky actions | "approve for me": an automatic reviewer | – | – | – | – |
 
 - Under **Team** you can raise or lower any agent's permission; ⚠ marks a raised one, and Auto
   asks you to confirm.
@@ -214,7 +275,7 @@ documents for sandboxing tools. The page notices within about a minute.
 - **Live preview, reply stats** (time, ≈ cost, tokens, files changed), **↻ Retry** for failed
   replies, **↩ Reply** to one agent, **Markdown** with Copy buttons, **Export** as Markdown.
 - **Continue in a terminal**: the bottom of each chat shows `claude -r <id>`, `codex resume <id>`
-  or `gemini --resume <id>` for every agent.
+  `agy --conversation <id>` or `gemini --resume <id>` for every agent.
 - **Old chats**: if you used the earlier single-folder version (`~/groupchat`), the page offers
   to import copies of its chats once.
 
@@ -227,7 +288,7 @@ teams). Deleting a chat on the page doesn't delete the agents' own sessions.
 ## Development
 
 ```bash
-python3 -m unittest discover -s tests -t .    # ~220 tests, under a minute, no AI calls
+python3 -m unittest discover -s tests -t .    # ~260 tests, under a minute, no AI calls
 python3 -m agent_groupchat --no-browser       # run from the source folder
 ```
 
@@ -236,7 +297,7 @@ format, so they cost nothing. GitHub Actions runs them on Linux, macOS and Windo
 3.13) and installs the package with pipx on all three on every push.
 
 Layout: `agent_groupchat/server.py` (chat engine + web server, incl. Race/Split), `copies.py`
-(the git copies), `roles.py`, `config.py`, `platform_support.py`, `adapters/` (one file per AI: `claude.py`, `codex.py`, `gemini.py`,
+(the git copies), `roles.py`, `config.py`, `platform_support.py`, `adapters/` (one file per AI: `claude.py`, `codex.py`, `antigravity.py`, `gemini.py`,
 `aider.py`, `openai_api.py`), `static/index.html` (the page). Adding an AI means writing one
 adapter (see `adapters/base.py`). The design is in [SPEC.md](https://github.com/MohammedAtya/agent-groupchat/blob/main/SPEC.md).
 
