@@ -493,10 +493,14 @@ function ago(ts) {
   return new Date(ts*1000).toLocaleDateString();
 }
 
+let listSeq = 0, listShown = 0;  // like refresh(): a late, older answer is ignored
 async function loadList() {
+  const mine = ++listSeq;
   let d;
-  try { d = await api('/api/chats'); $('down').hidden = true; }
-  catch (e) { $('down').hidden = false; return []; }
+  try { d = await api('/api/chats'); }
+  catch (e) { if (mine === listSeq) $('down').hidden = false; return []; }
+  if (mine < listShown) return d.chats || [];
+  listShown = mine; $('down').hidden = true;
   home = d.home;
   adapters = d.adapters || [];
   adapters.forEach(a => { adapterNames[a.id] = a.name; adapterColors[a.id] = a.color; });
@@ -515,12 +519,15 @@ async function loadList() {
     (!current || !Object.values(perm).some(p => p.limited && !p.locked)));
   const list = $('list'); list.innerHTML = '';
   const seen = loadSeen();
-  for (const c of d.chats) if (!(c.id in seen) || c.id === current) seen[c.id] = c.updated;
+  for (const c of d.chats) {  // counts only grow (huge values are old timestamps: start over)
+    if (typeof seen[c.id] !== 'number' || seen[c.id] > 1e6) seen[c.id] = c.count;
+    else if (c.id === current) seen[c.id] = Math.max(seen[c.id], c.count);
+  }
   for (const id of Object.keys(seen)) if (!d.chats.some(c => c.id === id)) delete seen[id];
   saveSeen(seen);
   for (const c of d.chats) {
     const el = document.createElement('div');
-    const fresh = c.id !== current && c.updated > seen[c.id] + 0.5;
+    const fresh = c.id !== current && c.count > seen[c.id];
     el.className = 'item' + (c.id === current ? ' active' : '') + (fresh ? ' unread' : '');
     if (fresh) el.title = 'New messages since you last looked';
     const t = document.createElement('div'); t.className = 't'; t.textContent = c.title;
@@ -536,6 +543,7 @@ async function loadList() {
 
 async function openChat(id) {
   current = id; lastSig = ''; lastScrolled = false; openDiffs = new Set();
+  delete watched[id];  // what happened here while you looked at another chat isn't news
   raceOpen = new Set(); raceDiffs = {}; raceSel = new Set();  // per chat: never show another chat's copy
   for (const k in diffCache) delete diffCache[k];
   try { localStorage.setItem('gc-last', id); } catch (e) {}
@@ -544,13 +552,22 @@ async function openChat(id) {
   await refresh(); loadList(); $('t').focus();
 }
 
+let refreshSeq = 0, refreshShown = 0;  // requests can overlap: only the newest answer counts
 async function refresh() {
   if (!current) return;
+  const mine = ++refreshSeq, asked = current;
   let c;
-  try { c = await api('/api/chats/' + current); }
-  catch (e) { $('typing').textContent = 'Server not reachable…'; return; }
+  try { c = await api('/api/chats/' + asked); }
+  catch (e) {
+    if (mine === refreshSeq && asked === current) $('typing').textContent = 'Server not reachable…';
+    return;
+  }
+  if (mine < refreshShown || asked !== current) return;  // an older or other chat's answer
+  refreshShown = mine;
   if (c.error) { current = null; return; }
   needsYou(c);
+  const seenNow = loadSeen(), shown = c.messages.filter(m => !m.hidden).length;
+  if (!(seenNow[c.id] >= shown)) { seenNow[c.id] = shown; saveSeen(seenNow); }  // you saw these
   $('title').textContent = c.title;
   $('folder').textContent = c.folder;
   chat = c; agentList = c.agents || []; colors = c.colors || {}; aliasMap = c.aliases || {};
@@ -730,7 +747,7 @@ function choiceButtons(m) {  // CHOICES: an agent offered options; a click answe
     bt.title = `Answer ${names[m.who] || m.who}: "${o}"`;
     bt.onclick = async () => {
       box.querySelectorAll('button').forEach(x => { x.disabled = true; });
-      const r = await api(`/api/chats/${current}/send`, {text: `@${m.who} ${o}`});
+      const r = await api(`/api/chats/${current}/send`, {text: `@${m.who} ${o}`, reply_to: m.who});
       if (r.error) { alert(r.error); box.querySelectorAll('button').forEach(x => { x.disabled = false; }); return; }
       lastSig = ''; refresh(); loadList();
     };
@@ -1414,17 +1431,12 @@ $('legacyImport').onclick = async () => {
 };
 $('legacyNo').onclick = async () => { await api('/api/legacy', {action: 'dismiss'}); $('legacy').hidden = true; };
 
-(async () => {
-  const list = await loadList();
-  let last = null; try { last = localStorage.getItem('gc-last'); } catch (e) {}
-  const pick = list.find(c => c.id === last) || list[0];
-  if (pick) openChat(pick.id);
-})();
 // ---- notifications: tell the user when the open chat finishes or needs them (SPEC §7.4)
 const BASE_TITLE = document.title;
 let notifyOn = false, unread = 0;
 const watched = {};  // chat id -> what refresh() saw last time
 try { notifyOn = localStorage.getItem('gc-notify') === 'on'; } catch (e) {}
+// gc-seen: chat id -> how many messages it had when you last looked
 function loadSeen() { try { return JSON.parse(localStorage.getItem('gc-seen') || '{}') || {}; } catch (e) { return {}; } }
 function saveSeen(x) { try { localStorage.setItem('gc-seen', JSON.stringify(x)); } catch (e) {} }
 function showNotifyBtn() {
@@ -1486,9 +1498,10 @@ function needsYou(c) {  // what changed since the last refresh -> tab title coun
   let why = '';
   if (st.wait && !prev.wait) why = '⏸️ A plan is ready: go ahead, or reply to change it.';
   else if (st.split && !prev.split) why = '⏸️ The parts are ready for your OK.';
-  else if (st.race && !prev.race) why = '⚡ The Race is done: pick a copy.';
-  else if (prev.busy && !st.busy) {
-    const done = c.messages.slice(prev.from ?? prev.n).filter(replies);
+  else if (st.race && !prev.race) why = r.kind === 'split' ? '🧩 The Split is done: use the result.'
+                                                        : '⚡ The Race is done: pick a copy.';
+  else if (!st.busy && (prev.busy || fresh.length)) {  // a turn ended (maybe all between two checks)
+    const done = c.messages.slice(prev.busy ? prev.from ?? prev.n : prev.n).filter(replies);
     if (done.length) {
       const who = [...new Set(done.map(m => m.who))];
       const failed = done.filter(m => /^\((error|timed out)/.test(m.text)).map(m => names[m.who] || m.who);
@@ -1500,6 +1513,13 @@ function needsYou(c) {  // what changed since the last refresh -> tab title coun
   if (why && away()) notify(c.title, why);
 }
 
+// start: open the chat you had open last (after everything above is set up)
+(async () => {
+  const list = await loadList();
+  let last = null; try { last = localStorage.getItem('gc-last'); } catch (e) {}
+  const pick = list.find(c => c.id === last) || list[0];
+  if (pick) openChat(pick.id);
+})();
 setInterval(() => { refresh(); }, 1000);
 setInterval(() => { loadList(); }, 5000);
 setInterval(() => { loadSkills(); }, 60000);

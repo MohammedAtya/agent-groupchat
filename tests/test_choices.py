@@ -2,6 +2,7 @@
 import unittest
 
 from tests.helpers import ChatTest, srv
+from tests.test_http import HttpBase
 
 
 class SplitChoices(unittest.TestCase):
@@ -52,6 +53,38 @@ class ChoicesInChat(ChatTest):
         self.send(c, "@claude Safe")  # what the button sends
         self.assertEqual([m["who"] for m in self.replies(c)], ["claude", "claude"])
         self.assertEqual(self.calls("codex"), [])
+
+
+    def test_a_choice_mentioning_another_agent_still_answers_only_the_asker(self):
+        self.rules({"style": "claude", "if": "how?", "reply": "Which?\nCHOICES: Ask @codex to review | Skip"},
+                   {"style": "claude", "reply": "Asking."})
+        c = self.chat()
+        self.send(c, "@claude how?")
+        srv.post_user_message(c, "@claude Ask @codex to review", None, reply_to="claude")
+        srv.worker(c)
+        self.assertEqual(c["messages"][-2]["to"], ["claude"])
+        self.assertEqual(self.calls("codex"), [])  # the @codex inside the choice didn't wake it
+
+    def test_unknown_reply_to_is_ignored(self):
+        c = self.chat()
+        srv.post_user_message(c, "@codex hi", None, reply_to="nobody")
+        self.assertEqual(c["messages"][-1]["to"], ["codex"])
+        self.assertNotIn("reply_to", c["messages"][-1])
+
+
+class ChoicesOverHttp(HttpBase):
+    def test_send_with_reply_to_and_list_counts(self):
+        import json
+        code, body = self.req("POST", "/api/chats", {"folder": self.folder, "agents": [
+            {"adapter": "claude"}, {"adapter": "codex"}]})
+        cid = json.loads(body)["id"]
+        code, _ = self.req("POST", f"/api/chats/{cid}/send",
+                           {"text": "@claude Ask @codex", "reply_to": "claude"})
+        self.assertEqual(code, 200)
+        self.assertEqual(srv.chats[cid]["messages"][0]["to"], ["claude"])
+        code, body = self.req("GET", "/api/chats")
+        row = next(x for x in json.loads(body)["chats"] if x["id"] == cid)
+        self.assertGreaterEqual(row["count"], 1)
 
 
 if __name__ == "__main__":

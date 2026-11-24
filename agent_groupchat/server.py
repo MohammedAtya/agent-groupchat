@@ -782,6 +782,8 @@ def route(chat, m):
         return [], False
     if m.get("mode") == "no-split":  # the Lead's flow, or just one agent
         return ([] if m.get("flow") else [m["only"]]), False
+    if m.get("reply_to") in agent_ids(chat):  # a decision button: that agent only, whatever it says
+        return [m["reply_to"]], False
     ids = agent_ids(chat)
     sk, at = m.get("skill"), mentioned(chat, m["text"])
     # @name anywhere addresses only those agents; the others stay silent and read it as
@@ -1340,12 +1342,15 @@ def flow_agents(chat):
     return [b for b in agent_ids(chat) if b in inflow]
 
 
-def post_user_message(chat, text, sk=None):
+def post_user_message(chat, text, sk=None, reply_to=None):
     """Add a user message. A plain message in a chat with roles starts the workflow, or,
-    while the plan waits for your OK, goes back to the Planners as feedback."""
+    while the plan waits for your OK, goes back to the Planners as feedback.
+    reply_to: an agent id (a decision button): only that agent gets it."""
     with lock:
         halted.discard(chat["id"])
         extra = {"skill": sk} if sk else {}
+        if reply_to in agent_ids(chat):
+            extra["reply_to"] = reply_to
         want, flow = route(chat, {"text": text, **extra})
         f = chat.get("flow")
         if flow and f and f.get("waiting") and "plan" in f["stages"]:  # feedback on the plan
@@ -1697,17 +1702,28 @@ def human_size(n):
 
 def bring_ignored(chat, r, c):
     """Copy the user's git-ignored files (.env, node_modules, .venv…) into copy `c`, so tests
-    can run there (SPEC §14.5b). The first copy tells the chat what came along."""
+    can run there (SPEC §14.5b). The first copy tells the chat what came along.
+    -> False if the copy couldn't be made safe: then it's an error and nobody works in it."""
     try:
         info = copies.copy_ignored(chat["folder"], c["folder"])
     except OSError as e:
-        info = {"files": 0, "bytes": 0, "names": [], "skipped": [], "error": str(e)}
+        c["status"] = "error"
+        # tagged like the turn it replaces: a racer / a part can be retried, a combined copy can't
+        kind = ("combine", "⚡ Combine") if "from" in c else ("part", "🧩 Split") if "part" in c \
+            else ("race", "⚡ Race")
+        name = next((n for n, x in r["copies"].items() if x is c), c["agent"])
+        add_msg(chat, c["agent"], f"(error) {c['name']}'s copy couldn't be made safe to use "
+                                  f"(copying your git-ignored files: {e}), so it isn't used.",
+                meta={"role": kind[1], "stage": kind[0], "copy": name})
+        if kind[0] != "combine":
+            set_status(chat, [r["msg"]], c["agent"], "error")
+        return False
     with lock:
         first = "ignored" not in r
         if first:
-            r["ignored"] = {k: info[k] for k in ("names", "skipped", "files", "bytes")}
-    if not first or not (info["names"] or info["skipped"]):
-        return
+            r["ignored"] = {k: info[k] for k in ("names", "skipped", "files", "bytes", "links", "failed")}
+    if not first or not (info["names"] or info["skipped"] or info["links"] or info["failed"]):
+        return True
     names = ", ".join(info["names"][:6]) + (f" and {len(info['names']) - 6} more"
                                              if len(info["names"]) > 6 else "")
     text = (f"Your git-ignored files were copied into each copy so tests can run there: {names} "
@@ -1715,7 +1731,14 @@ def bring_ignored(chat, r, c):
             if info["names"] else "")
     if info["skipped"]:
         text += (" " if text else "") + "Not copied (too big): " + skipped_text(info["skipped"]) + "."
+    if info["links"]:
+        text += ((" " if text else "") + "Not copied (links that lead outside the copy): "
+                 + ", ".join(info["links"][:6]) + (f" and {len(info['links']) - 6} more"
+                                                   if len(info["links"]) > 6 else "") + ".")
+    if info["failed"]:
+        text += (" " if text else "") + "Couldn't be copied: " + ", ".join(info["failed"][:6]) + "."
     add_msg(chat, "system", text)
+    return True
 
 
 def skipped_text(skipped):
@@ -1752,7 +1775,8 @@ def open_copy(chat, r, name, agent_id, extra=None):
     if chat.get("deleted") or chat.get("race") is not r:
         copies.remove_copies(r["root"], [path], [branch])
         return None
-    bring_ignored(chat, r, c)
+    if not bring_ignored(chat, r, c):
+        return None
     return c
 
 
@@ -1850,7 +1874,8 @@ def merge_into_result(chat, r, names, fixer):
         return None, str(e)
     c["folder"] = path if r["scope"] == "." else os.path.join(path, *r["scope"].split("/"))
     c["key"], c["conflicts"], c["merged_at"] = name, conflicts, copies.head(path)
-    bring_ignored(chat, r, c)
+    if not bring_ignored(chat, r, c):
+        return None, "the combined copy couldn't be made safe"
     return c, conflicts
 
 
@@ -2567,7 +2592,8 @@ class Handler(BaseHTTPRequestHandler):
             config_error = refresh_adapters()
             with lock:
                 lst = sorted(({**{k: c[k] for k in ("id", "title", "updated", "folder", "lock")},
-                               "agents": len(c["agents"])}
+                               "agents": len(c["agents"]),
+                               "count": sum(1 for m in c["messages"] if not m.get("hidden"))}
                               for c in chats.values()), key=lambda c: -c["updated"])
             return self.send_json({"chats": lst, "home": os.path.expanduser("~"),
                                    "sandbox": sandbox_ok(),
@@ -2728,6 +2754,7 @@ class Handler(BaseHTTPRequestHandler):
             if not text:
                 return self.send_json({"error": "empty"}, 400)
             sk = parse_skill(text, c["folder"])
+            reply_to = d.get("reply_to") if d.get("reply_to") in agent_ids(c) else None
             with lock:
                 halted.discard(c["id"])
             r = c.get("race")
@@ -2741,10 +2768,11 @@ class Handler(BaseHTTPRequestHandler):
                     start_split(c, text, d.get("parts") if d.get("split") == "own" else None)
                 except (ValueError, copies.GitError) as e:
                     return self.send_json({"error": str(e)}, 400)
-            elif split_waiting(c) and not sk and mentioned(c, text) in ([], [r["planner"]]):
+            elif split_waiting(c) and not sk and (reply_to == r["planner"] if reply_to else
+                                                  mentioned(c, text) in ([], [r["planner"]])):
                 split_feedback(c, text)  # a reply to the Planner's parts: it revises them
             else:
-                post_user_message(c, text, sk)
+                post_user_message(c, text, sk, reply_to)
             kick(c)
         elif action in ("retry", "compact"):
             if c["id"] in workers:

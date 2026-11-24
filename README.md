@@ -298,7 +298,7 @@ teams). Deleting a chat on the page doesn't delete the agents' own sessions.
 ## Development
 
 ```bash
-python3 -m unittest discover -s tests -t .    # ~275 tests, under a minute, no AI calls
+python3 -m unittest discover -s tests -t .    # ~285 tests, under a minute, no AI calls
 python3 -m agent_groupchat --no-browser       # run from the source folder
 ```
 

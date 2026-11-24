@@ -242,7 +242,7 @@ def _size(path, limit_bytes, limit_files):
     for top, dirs, files in os.walk(path):
         dirs[:] = [d for d in dirs if d not in IGNORED_SKIP]
         for f in files + [d for d in dirs if os.path.islink(os.path.join(top, d))]:
-            if f in IGNORED_SKIP:
+            if f in IGNORED_SKIP or _special(os.path.join(top, f)):
                 continue
             try:
                 total += os.lstat(os.path.join(top, f)).st_size
@@ -254,26 +254,148 @@ def _size(path, limit_bytes, limit_files):
     return total, n
 
 
+def _special(path):
+    """A named pipe, socket or device file: never copied (it holds no content)."""
+    try:
+        mode = os.lstat(path).st_mode
+    except OSError:
+        return True
+    return stat.S_ISFIFO(mode) or stat.S_ISSOCK(mode) or stat.S_ISCHR(mode) or stat.S_ISBLK(mode)
+
+
+def _skip(folder, names):
+    """copytree's ignore: caches, build output and special files."""
+    return [n for n in names if n in IGNORED_SKIP or _special(os.path.join(folder, n))]
+
+
+def _in_folder(folder, change):
+    """Run change() on an entry of `folder`. The copy is ours, so a read-only folder (e.g. a
+    0555 package in node_modules) is opened for a moment if needed."""
+    try:
+        return change()
+    except PermissionError:
+        mode = os.stat(folder).st_mode
+        os.chmod(folder, mode | stat.S_IWUSR | stat.S_IXUSR)
+        try:
+            return change()
+        finally:
+            os.chmod(folder, mode)
+
+
+def _remove(path):
+    """Delete a file, link or folder in the copy, read-only folders included. -> gone?"""
+    try:
+        if os.path.isdir(path) and not os.path.islink(path):
+            for top, dirs, _ in os.walk(path):
+                for d in [top] + [os.path.join(top, x) for x in dirs]:
+                    if not os.path.islink(d):
+                        os.chmod(d, os.stat(d).st_mode | stat.S_IWUSR | stat.S_IXUSR)
+            _in_folder(os.path.dirname(path), lambda: shutil.rmtree(path))
+        elif os.path.lexists(path):
+            _in_folder(os.path.dirname(path), lambda: os.remove(path))
+    except OSError:
+        pass
+    return not os.path.lexists(path)
+
+
+def _retarget(link, target):
+    def change():
+        if os.path.lexists(link):
+            os.remove(link)
+        os.symlink(target, link)
+    _in_folder(os.path.dirname(link), change)
+
+
+def _links_in(path):
+    """Every symlink at or under `path` (not following them)."""
+    if os.path.islink(path):
+        return [path]
+    found = []
+    if os.path.isdir(path):
+        for top, dirs, files in os.walk(path):
+            found += [os.path.join(top, n) for n in files + dirs if os.path.islink(os.path.join(top, n))]
+    return found
+
+
+def _inside(path, folder):
+    return path == folder or path.startswith(folder + os.sep)
+
+
+def _link_maps(src, dest):
+    """([(user path, copy path)] for the chat's folder and, if different, the repo's top;
+    the copy's top folder)."""
+    maps, root = [(os.path.realpath(src), os.path.realpath(dest))], os.path.realpath(dest)
+    try:
+        top_src = os.path.realpath(git(src, "rev-parse", "--show-toplevel").strip())
+        root = os.path.realpath(git(dest, "rev-parse", "--show-toplevel").strip())
+        if top_src != maps[0][0]:
+            maps.append((top_src, root))
+    except GitError:
+        pass
+    return maps, root
+
+
+def _contain_links(links, maps, copy_root):
+    """No symlink in the copy may lead out of it. 1) An absolute link into the user's project
+    is re-pointed to the same place in the copy. 2) Then, until nothing changes, every link
+    whose whole chain ends outside the copy (the user's files, elsewhere, another agent's
+    copy) or nowhere is deleted. -> (deleted links, links that couldn't be deleted)."""
+    for link in links:
+        try:
+            target = os.readlink(link)
+        except OSError:
+            continue
+        if os.path.isabs(target):
+            real = os.path.realpath(target)
+            for src, dest in maps:
+                if _inside(real, src):
+                    try:
+                        _retarget(link, os.path.join(dest, os.path.relpath(real, src)))
+                    except OSError:
+                        pass  # step 2 deletes it if it still leads out
+                    break
+    left, deleted, stuck = list(links), [], []
+    changed = True
+    while changed:
+        changed = False
+        for link in list(left):
+            if not os.path.lexists(link):
+                left.remove(link)
+                continue
+            if _inside(os.path.realpath(link), copy_root) and os.path.exists(link):
+                continue
+            left.remove(link)
+            changed = True
+            (deleted if _remove(link) else stuck).append(link)
+    return deleted, stuck
+
+
 def copy_ignored(src, dest, max_bytes=None, max_files=None):
     """Copy the git-ignored files and folders of the user's folder `src` into the copy's
     folder `dest` (real copies, so an agent can't change the user's files through them).
-    Caches and build output are skipped; whatever would go past the size limits is left out.
-    -> {"files", "bytes", "names": [copied], "skipped": [[name, bytes or None (= huge)]]}."""
+    Caches, build output and special files are skipped; whatever would go past the size limits
+    is left out. Symlinks are copied as links and then contained (_contain_links).
+    -> {"files", "bytes", "names": [copied], "skipped": [[name, bytes or None (= huge)]],
+        "links": [deleted links that led out of the copy], "failed": [names not copied]}.
+    Raises OSError if the copy can't be made safe (a link or half copy it can't delete): then
+    the copy must not be used."""
     max_bytes = MAX_IGNORED_BYTES if max_bytes is None else max_bytes
     max_files = MAX_IGNORED_FILES if max_files is None else max_files
-    out = {"files": 0, "bytes": 0, "names": [], "skipped": []}
+    out = {"files": 0, "bytes": 0, "names": [], "skipped": [], "links": [], "failed": []}
     try:
         raw = git_bytes(src, "ls-files", "-z", "--others", "--ignored", "--exclude-standard",
                         "--directory")
     except GitError:
         return out
     entries = sorted(x.decode("utf-8", "surrogateescape").rstrip("/") for x in raw.split(b"\0") if x)
+    maps, copy_root = _link_maps(src, dest)
+    links, owner = [], {}
     for rel in entries:
         if any(part in IGNORED_SKIP for part in rel.split("/")):
             continue
         s = os.path.join(src, *rel.split("/"))
         d = os.path.join(dest, *rel.split("/"))
-        if not os.path.lexists(s) or os.path.lexists(d):
+        if not os.path.lexists(s) or os.path.lexists(d) or _special(s):
             continue
         try:
             size, n = _size(s, max_bytes - out["bytes"], max_files - out["files"])
@@ -287,15 +409,32 @@ def copy_ignored(src, dest, max_bytes=None, max_files=None):
         try:
             os.makedirs(os.path.dirname(d), exist_ok=True)
             if os.path.isdir(s) and not os.path.islink(s):
-                shutil.copytree(s, d, symlinks=True, ignore=shutil.ignore_patterns(*IGNORED_SKIP))
+                shutil.copytree(s, d, symlinks=True, ignore=_skip)
             else:
                 shutil.copy2(s, d, follow_symlinks=False)
         except (OSError, shutil.Error):
-            out["skipped"].append([rel, size])
+            if not _remove(d):  # never keep half a copy (its links were never checked)
+                raise OSError(f"couldn't remove the half-copied {rel} from the copy")
+            out["failed"].append(rel)
             continue
+        found = _links_in(d)
+        links += found
+        owner.update({link: rel for link in found})
         out["files"] += n
         out["bytes"] += size
         out["names"].append(rel)
+    deleted, stuck = _contain_links(links, maps, copy_root)
+    for link in deleted:
+        out["links"].append(os.path.relpath(link, dest).replace(os.sep, "/"))
+        out["files"] -= 1
+        if owner[link] == out["links"][-1] and owner[link] in out["names"]:
+            out["names"].remove(owner[link])
+    for rel in sorted({owner[link] for link in stuck}):  # a link we can't delete: drop it all
+        if rel in out["names"]:
+            out["names"].remove(rel)
+        if not _remove(os.path.join(dest, *rel.split("/"))):
+            raise OSError(f"couldn't remove {rel} from the copy")
+        out["failed"].append(rel)
     return out
 
 
