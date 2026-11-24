@@ -1,5 +1,6 @@
 """The Antigravity (agy) adapter, against a fake `agy` (tests/bin/fake_agent.py antigravity)."""
 import json
+import os
 import unittest
 
 from tests.helpers import ChatTest, srv
@@ -112,9 +113,11 @@ class AntigravityAgent(ChatTest):
         self.assertEqual(self.argv()[self.argv().index("--model") + 1], "gemini-4-neon-high")
 
     def test_describe_tool(self):
-        f = "/p"
-        self.assertEqual(agy.describe_tool("read_file", {"Path": "/p/a.py"}, f), "📖 reading a.py")
-        self.assertEqual(agy.describe_tool("edit_file", {"Path": "/p/a.py"}, f), "✏️ editing a.py")
+        # a real absolute path on this OS (Python 3.13 on Windows: "/p" without a drive isn't one)
+        f = os.path.abspath("p")
+        path = os.path.join(f, "a.py")
+        self.assertEqual(agy.describe_tool("read_file", {"Path": path}, f), "📖 reading a.py")
+        self.assertEqual(agy.describe_tool("edit_file", {"Path": path}, f), "✏️ editing a.py")
         self.assertEqual(agy.describe_tool("run_command", {"CommandLine": "ls -la"}, f), "$ ls -la")
 
 
