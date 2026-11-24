@@ -53,6 +53,20 @@
                     border:1px solid var(--c, var(--border)); background:var(--panel); color:var(--text); }
   .choices button:hover:not(:disabled) { background:var(--hover); }
   .choices button:disabled { opacity:.5; cursor:default; }
+  .loose { margin-top:7px; padding:6px 10px; border:1px solid #e8c77a; background:rgba(232,199,122,.12);
+           border-radius:8px; font-size:12px; }
+  .loose b { color:#9a6b00; } .loose ul { margin:3px 0 0 18px; padding:0; }
+  @media (prefers-color-scheme: dark) { .loose b { color:#e8c77a; } }
+  .diff .cl { cursor:pointer; } .diff .cl:hover { outline:1px dashed var(--muted); }
+  .diff .noted { box-shadow:inset 3px 0 0 var(--user); }
+  #tray { margin:0 16px 6px; padding:8px 10px; border:1px solid var(--user); border-radius:10px;
+          background:var(--panel); font-size:13px; }
+  #tray .th { display:flex; gap:8px; align-items:center; } #tray .th b { flex:1; }
+  #tray code { display:block; white-space:pre-wrap; background:var(--bg); padding:3px 6px; border-radius:6px;
+               margin:4px 0; font-size:12px; max-height:4.5em; overflow:auto; }
+  #tray textarea { width:100%; min-height:44px; box-sizing:border-box; }
+  #tray .note1 { display:flex; gap:6px; align-items:baseline; margin:2px 0; }
+  #tray .note1 span { flex:1; } #tray button { font-size:12px; padding:2px 10px; cursor:pointer; }
   .item.unread .t { font-weight:700; }
   .item.unread .t::before { content:'● '; color:var(--user); }
   #flowbar { display:flex; gap:10px; align-items:center; justify-content:center; padding:6px 16px;
@@ -142,8 +156,8 @@
   form#f button { background:var(--user); color:#fff; border:0; border-radius:10px;
                   padding:0 18px; font-weight:600; cursor:pointer; }
   form#f button#stopBtn { background:var(--bg); color:#c33; border:1px solid #e5a3a0; }
-  form#f button#raceBtn, form#f button#splitBtn, form#f button#gitInit { background:var(--bg); color:var(--text); border:1px solid var(--border); }
-  form#f button#raceBtn:disabled, form#f button#splitBtn:disabled { opacity:.45; cursor:help; }
+  form#f button#raceBtn, form#f button#splitBtn, form#f button#debateBtn, form#f button#gitInit { background:var(--bg); color:var(--text); border:1px solid var(--border); }
+  form#f button#raceBtn:disabled, form#f button#splitBtn:disabled, form#f button#debateBtn:disabled { opacity:.45; cursor:help; }
   #splitDlg textarea { width:100%; min-height:52px; padding:6px 8px; border-radius:8px; border:1px solid var(--border);
                        background:var(--bg); font-size:13px; resize:vertical; }
   #splitDlg label.opt { display:flex; gap:8px; align-items:flex-start; color:var(--text); margin:8px 0 2px; }
@@ -296,12 +310,21 @@
   <div id="composer">
   <div id="menu" hidden></div>
   <div id="to" style="font-size:12px;color:var(--muted);padding:0 16px 4px"></div>
+  <div id="tray" hidden>
+    <div class="th"><b id="trayTitle"></b><button type="button" id="trayClose" title="Throw these comments away">✕</button></div>
+    <div id="trayList"></div>
+    <div id="trayEdit" hidden><code id="trayCode"></code>
+      <textarea id="trayText" placeholder="Your comment on this line… (Ctrl+Enter adds it)"></textarea>
+      <button type="button" id="trayAdd">Add comment</button> <button type="button" id="trayCancel">Cancel</button></div>
+    <div id="traySend"></div>
+  </div>
   <form id="f" hidden>
     <textarea id="t" placeholder="Message the group… (@name to ask one agent, / for skills)"></textarea>
     <button type="button" id="stopBtn" hidden title="Stop the running replies (and the rest of this turn)">■ Stop</button>
     <button type="button" id="gitInit" hidden title="Make this folder a git repo (git init + a first commit; your files don't change). ⚡ Race needs it.">Initialize git here</button>
     <button type="button" id="raceBtn" title="⚡ Race">⚡ Race</button>
     <button type="button" id="splitBtn" title="🧩 Split">🧩 Split</button>
+    <button type="button" id="debateBtn" title="⚖ Debate">⚖ Debate</button>
     <button type="submit">Send</button>
   </form>
   </div>
@@ -544,6 +567,7 @@ async function loadList() {
 async function openChat(id) {
   current = id; lastSig = ''; lastScrolled = false; openDiffs = new Set();
   delete watched[id];  // what happened here while you looked at another chat isn't news
+  notes = []; noteDraft = null; showTray();
   raceOpen = new Set(); raceDiffs = {}; raceSel = new Set();  // per chat: never show another chat's copy
   for (const k in diffCache) delete diffCache[k];
   try { localStorage.setItem('gc-last', id); } catch (e) {}
@@ -583,6 +607,13 @@ async function refresh() {
     `⚡ Race: ${listNames(c.racers || [])} each do this message in their own copy of the project, at the same time. ` +
     'Then the Tester tests each copy, the Reviewer compares them, and you pick one. Costs about one turn per agent.';
   $('gitInit').hidden = !canInit;
+  const db = $('debateBtn'), stances = ['For', 'Against', 'Neutral'];
+  db.disabled = !!c.debate_block;
+  db.title = c.debate_block ? `⚖ Debate isn't possible here: ${c.debate_block}.` :
+    '⚖ Debate the question in the message box: ' +
+    agentList.map((a, i) => `${a.name} argues ${stances[i % 3]}`).join(', ') +
+    '. Two rounds (case, then rebuttal), then an impartial verdict. Nobody changes files. ' +
+    `About ${agentList.length * 2 + 1} turns.`;
   const sb = $('splitBtn');
   sb.disabled = !!c.split_block;
   sb.title = c.split_block ? `🧩 Split isn't possible here: ${c.split_block}.` :
@@ -622,12 +653,13 @@ async function refresh() {
       if (m.who === 'user') b.textContent = m.text;          // your messages stay plain text
       else { b.className = 'md'; b.innerHTML = md(m.text); } // AI replies: Markdown
       d.append(w, b);
+      if (m.who !== 'user' && meta.loose_ends) d.append(looseEnds(meta.loose_ends));
       if (m.who !== 'user' && meta.choices && idx > lastUser) d.append(choiceButtons(m));
       if (m.who === 'user' && m.status) d.append(statusLine(m.status));
       const info = metaLine(meta);
       if (info) { const x = document.createElement('div'); x.className = 'meta'; x.textContent = info; d.append(x); }
       if (m.who !== 'user') d.append(actions(m, idx, failed));
-      if (openDiffs.has(idx)) showDiff(d, idx);
+      if (openDiffs.has(idx)) showDiff(d, idx, m);
       inner.append(d);
     });
     if (c.race) inner.append(racePanel(c));
@@ -740,6 +772,14 @@ function statusLine(status) {
   }
   return x;
 }
+function looseEnds(items) {  // LOOSE ENDS: what the agent says is unfinished or temporary
+  const box = document.createElement('div'); box.className = 'loose';
+  const b = document.createElement('b'); b.textContent = `⚠ Loose ends (${items.length})`;
+  b.title = 'What the agent says it left unfinished or temporary: check before you rely on it';
+  const ul = document.createElement('ul');
+  for (const x of items) { const li = document.createElement('li'); li.textContent = x; ul.append(li); }
+  box.append(b, ul); return box;
+}
 function choiceButtons(m) {  // CHOICES: an agent offered options; a click answers that agent only
   const box = document.createElement('div'); box.className = 'choices';
   for (const o of m.meta.choices) {
@@ -765,7 +805,7 @@ function actions(m, idx, failed) {
   btn('↩ Reply', `Write to ${names[m.who] || m.who} only`, () => {
     const t = $('t'); t.value = `@${m.who} ` + t.value.replace(/^@[\w-]+\s*/, ''); t.focus(); updateTo(); });
   const meta0 = m.meta || {};  // Race/Split replies other than a racer's or a part's can't be retried
-  const noRetry = meta0.race || (meta0.copy && !['race', 'part'].includes(meta0.stage));
+  const noRetry = meta0.race || meta0.stage === 'debate' || (meta0.copy && !['race', 'part'].includes(meta0.stage));
   if (failed && !m.retried && !noRetry)
     btn('↻ Retry', `Ask ${names[m.who] || m.who} again`, async () => {
       const r = await api(`/api/chats/${current}/retry`, {index: idx});
@@ -819,6 +859,7 @@ function racePanel(c) {  // one card per copy: Use this one / ▸ Diff / combine
     if (cp.files && cp.files.length) line(`✏️ ${cp.files.length} file${cp.files.length > 1 ? 's' : ''}: ${cp.files.join(', ')}` +
       (cp.diff ? `  (+${cp.diff[0]} −${cp.diff[1]})` : ''));
     if (cp.tests) line('🧪 ' + cp.tests + (cp.test_warn ? '  ⚠ the Tester changed files (undone)' : ''));
+    if (cp.loose_ends && cp.loose_ends.length) card.append(looseEnds(cp.loose_ends));
     const row = document.createElement('div'); row.className = 'row2';
     const use = document.createElement('button'); use.type = 'button'; use.className = 'go'; use.textContent = 'Use this one';
     use.title = 'Copy these changes into your project folder (not committed: you review and commit them)';
@@ -867,17 +908,45 @@ function racePanel(c) {  // one card per copy: Use this one / ▸ Diff / combine
   box.append(foot);
   return box;
 }
-async function showDiff(d, idx) {
+function diffLines(text) {  // unified diff -> [{text, cls, at: {file, line, removed}}] (hunk-counted)
+  const out = []; let file = null, oldN = 0, newN = 0, oldLeft = 0, newLeft = 0;
+  for (const line of text.split('\n')) {
+    let cls = '', at = null;
+    if (oldLeft > 0 || newLeft > 0) {
+      if (line[0] === '+' && newLeft > 0) { cls = 'a'; at = {file, line: newN++, removed: false}; newLeft--; }
+      else if (line[0] === '-' && oldLeft > 0) { cls = 'd'; at = {file, line: oldN++, removed: true}; oldLeft--; }
+      else if (line[0] === ' ' && oldLeft > 0 && newLeft > 0) { at = {file, line: newN++, removed: false}; oldN++; oldLeft--; newLeft--; }
+      else if (!line.startsWith('\\')) { oldLeft = newLeft = 0; }  // (shouldn't happen)
+    }
+    if (!at && !cls) {
+      const h = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
+      if (h) { cls = 'h'; oldN = +h[1]; oldLeft = h[2] === undefined ? 1 : +h[2]; newN = +h[3]; newLeft = h[4] === undefined ? 1 : +h[4]; }
+      else if (line.startsWith('--- ')) { cls = 'h'; const f = line.slice(4); if (f !== '/dev/null') file = f.replace(/^a\//, ''); }
+      else if (line.startsWith('+++ ')) { cls = 'h'; const f = line.slice(4); if (f !== '/dev/null') file = f.replace(/^b\//, ''); }
+    }
+    out.push({text: line, cls, at: at && at.file ? at : null});
+  }
+  return out;
+}
+async function showDiff(d, idx, m) {
   const box = document.createElement('div'); box.className = 'diff'; box.textContent = 'Loading…'; d.append(box);
-  if (!(idx in diffCache)) {
-    try { const r = await fetch(`/api/chats/${current}/diff/${idx}`); diffCache[idx] = r.ok ? await r.text() : '(diff not available)'; }
+  const chatId = current, key = `${chatId}/${idx}`;  // (cached per chat: idx alone is per chat)
+  if (!(key in diffCache)) {
+    try { const r = await fetch(`/api/chats/${chatId}/diff/${idx}`); diffCache[key] = r.ok ? await r.text() : '(diff not available)'; }
     catch (e) { box.textContent = '(could not load the diff)'; return; }
   }
+  if (chatId !== current) return;  // you switched chats meanwhile
   box.textContent = '';
-  for (const line of diffCache[idx].split('\n')) {
-    const sp = document.createElement('span');
-    sp.className = /^(\+\+\+|---)/.test(line) || line.startsWith('@@') ? 'h' : line[0] === '+' ? 'a' : line[0] === '-' ? 'd' : '';
-    sp.textContent = line + '\n'; box.append(sp);
+  const commentable = m && !(m.meta || {}).copy && agentOf(m.who).id;  // (a copy's changes live in the copy)
+  for (const ln of diffLines(diffCache[key])) {
+    const sp = document.createElement('span'); sp.className = ln.cls; sp.textContent = ln.text + '\n';
+    if (commentable && ln.at) {
+      sp.classList.add('cl'); sp.title = `Comment on ${ln.at.file} line ${ln.at.line} for ${names[m.who] || m.who}`;
+      if (notes.some(n => n.idx === idx && n.file === ln.at.file && n.line === ln.at.line && n.removed === ln.at.removed))
+        sp.classList.add('noted');
+      sp.onclick = () => startNote({who: m.who, idx, ...ln.at, code: ln.text.slice(1)});
+    }
+    box.append(sp);
   }
 }
 function metaLine(m) {
@@ -1430,6 +1499,84 @@ $('legacyImport').onclick = async () => {
   if (r.imported) alert(`Imported ${r.imported} chat${r.imported > 1 ? 's' : ''}. They're in the list on the left.`);
 };
 $('legacyNo').onclick = async () => { await api('/api/legacy', {action: 'dismiss'}); $('legacy').hidden = true; };
+
+// ---- 💬 comments on diff lines, sent to the agent that made the change (SPEC §7.6)
+let notes = [], noteDraft = null;  // notes: [{who, idx, file, line, removed, code, text}]
+const sendingTo = new Set();  // 'chat/agent' pairs whose comments are being sent right now
+function startNote(at) {
+  noteDraft = at; showTray();
+  $('trayText').value = ''; $('trayText').focus();
+}
+function addNote() {
+  const text = $('trayText').value.trim();
+  if (!noteDraft || !text) return;
+  notes.push({...noteDraft, text}); noteDraft = null; showTray(); lastSig = ''; refresh();
+}
+function showTray() {
+  const tray = $('tray');
+  tray.hidden = !notes.length && !noteDraft;
+  if (tray.hidden) return;
+  const whoAll = [...new Set(notes.map(n => n.who).concat(noteDraft ? [noteDraft.who] : []))];
+  $('trayTitle').textContent = `💬 Comments on ${listNames(whoAll)}'s changes`;
+  const list = $('trayList'); list.textContent = '';
+  notes.forEach((n, i) => {
+    const row = document.createElement('div'); row.className = 'note1';
+    const sp = document.createElement('span');
+    sp.textContent = `${names[n.who] || n.who} · ${n.file}:${n.line}${n.removed ? ' (removed line)' : ''}: ${n.text}`;
+    const x = document.createElement('button'); x.type = 'button'; x.textContent = '✕'; x.title = 'Remove this comment';
+    x.onclick = () => { notes.splice(i, 1); showTray(); lastSig = ''; refresh(); };
+    row.append(sp, x); list.append(row);
+  });
+  $('trayEdit').hidden = !noteDraft;
+  if (noteDraft) $('trayCode').textContent =
+    `${noteDraft.file}:${noteDraft.line}${noteDraft.removed ? ' (removed)' : ''}  ${noteDraft.code}`;
+  const sendBox = $('traySend'); sendBox.textContent = '';
+  for (const who of [...new Set(notes.map(n => n.who))]) {
+    const n = notes.filter(x => x.who === who).length;
+    const b = document.createElement('button'); b.type = 'button';
+    b.disabled = sendingTo.has(`${current}/${who}`);
+    b.textContent = b.disabled ? `Sending to ${names[who] || who}…`
+                               : `Send ${n} comment${n > 1 ? 's' : ''} to ${names[who] || who}`;
+    b.title = `Sends one message to ${names[who] || who} only, with each file and line`;
+    b.onclick = () => sendNotes(who, b);
+    sendBox.append(b, ' ');
+  }
+}
+function notesMessage(who, list) {
+  const quote = c => { c = c.trim().replace(/`/g, "'"); return c.length > 100 ? c.slice(0, 100) + '…' : c; };
+  return `@${who} Review comments on your changes:\n` + list.map(n =>
+    `- \`${n.file}\` ${n.removed ? 'removed line' : 'line'} ${n.line}` +
+    (n.code.trim() ? ` (\`${quote(n.code)}\`)` : '') + `: ${n.text}`).join('\n');
+}
+async function sendNotes(who, btn) {
+  const mine = notes.filter(n => n.who === who), chatId = current;
+  const busy = `${chatId}/${who}`;
+  if (!mine.length || !chatId || sendingTo.has(busy)) return;
+  sendingTo.add(busy); showTray();
+  let r;
+  try { r = await api(`/api/chats/${chatId}/send`, {text: notesMessage(who, mine), reply_to: who}); }
+  catch (e) { r = {error: "The chat server isn't reachable."}; }
+  finally { sendingTo.delete(busy); }
+  if (r.error) { if (chatId === current) alert(r.error); showTray(); return; }
+  notes = notes.filter(n => !mine.includes(n));  // exactly those (you may have switched chats meanwhile)
+  showTray(); lastSig = ''; refresh(); loadList();
+}
+$('trayAdd').onclick = addNote;
+$('trayText').onkeydown = e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); addNote(); } };
+$('trayCancel').onclick = () => { noteDraft = null; showTray(); };
+$('trayClose').onclick = () => {
+  if (notes.length && !confirm(`Throw away ${notes.length} unsent comment${notes.length > 1 ? 's' : ''}?`)) return;
+  notes = []; noteDraft = null; showTray(); lastSig = ''; refresh();
+};
+
+// ---- ⚖ Debate: For / Against / Neutral, rebuttals, then a verdict (SPEC §7.5)
+$('debateBtn').onclick = async () => {
+  const text = $('t').value.trim();
+  if (!text || !current) { $('t').focus(); $('t').placeholder = 'Write the question to debate first, then press ⚖ Debate'; return; }
+  const r = await api(`/api/chats/${current}/send`, {text, mode: 'debate'});
+  if (r.error) { alert(r.error); return; }
+  $('t').value = ''; updateTo(); lastSig = ''; refresh(); loadList();
+};
 
 // ---- notifications: tell the user when the open chat finishes or needs them (SPEC §7.4)
 const BASE_TITLE = document.title;

@@ -28,6 +28,7 @@ Start small: more agents means more cost and longer turns. Each row is a setup f
 | The full team | **Planner** → **Lead** → **Tester** → **Reviewer** | You OK the plan before any work starts. Give the Tester a cheaper model. |
 | Two areas at once | 2 **Leads** with a **focus** each (`backend` / `frontend`), plus a Reviewer | They take turns and build on each other. Different focuses, or you get the [overlap warning](../README.md#roles-and-the-order-of-turns). |
 | Several testers | 2+ **Testers** with a focus each (`login`, `database`) | Each tests its own area. |
+| A decision, not code (which library, which design) | 2+ agents (a Critic as judge is ideal), then **⚖ Debate** | They argue For / Against / Neutral, answer each other, and the judge recommends, with buttons to choose. |
 | The best of several tries | 2+ agents that can edit, then **⚡ Race** | Same task, separate copies; you pick the winner. |
 | A big task, faster | 2+ agents that can edit (+ a Planner), then **🧩 Split** | The Planner splits the work, or you write each agent's part; the parts are merged and checked. |
 
@@ -50,7 +51,10 @@ Which AI for which role:
 - **After a plan**, press **▶ Go ahead**, or reply to change it. Nothing is edited before that.
 - **Watch, and stop early**: if an agent heads the wrong way, press **■ Stop**, then say what to
   do differently. **↻ Retry** reruns a failed reply.
-- **Check changes with ▸ Diff** under a reply, and in git (`git diff`) before you commit.
+- **Check changes with ▸ Diff** under a reply, and in git (`git diff`) before you commit. Click a
+  line in the diff to comment on it, then **Send** the comments to the agent that made the change.
+- **Read the ⚠ Loose ends** under a Lead's reply (and on Race/Split cards): what it says is still
+  unfinished or temporary.
 - **Change the team any time** with **Team** (roles, focus, permission) or **🔒 Lock** (everyone
   talk-only, e.g. while you discuss a design).
 - **Long chat getting slow or expensive?** **Compact** summarizes it and the agents continue in

@@ -272,9 +272,18 @@ documents for sandboxing tools. The page notices within about a minute.
 
 ## More features
 
+- **⚖ Debate** (next to Split): write a question and press ⚖ Debate. Each agent argues a side
+  (For, Against, Neutral…), they answer each other once, then an impartial judge (the Critic, else
+  the Planner, else the neutral one) gives a verdict, often with decision buttons. Nobody changes
+  files.
+- **💬 Comment on diff lines**: in a reply's **▸ Diff**, click a line and write a comment; collect
+  several, then **Send** them to the agent that made the change, with file and line.
+- **Loose ends**: Leads and Race/Split agents list what they left unfinished or temporary; it shows
+  as a ⚠ checklist under the reply and on each copy's card, and the Tester and Reviewer check it.
 - **Discussion rounds**: after they all answer, agents can reply to each other for 1–3 rounds
   (each stays quiet if it has nothing to add). **Hand-offs**: an agent that addresses another
-  (`@codex …`, `Claude 2, can you …`) gets an answer from it.
+  (`@codex …`, `Claude 2, can you …`) gets an answer from it. After 3 hand-offs in a row
+  they pause and the chat says so; reply to let them go on.
 - **Skills**: type `/` for the skills your agents have; a skill runs on the agents that have it.
 - **🔔 Notifications**: turn them on in the chat's header to get a sound and a desktop notification
   when the agents finish, a plan waits for your OK, or a Race is done, while the tab is in the
@@ -298,7 +307,7 @@ teams). Deleting a chat on the page doesn't delete the agents' own sessions.
 ## Development
 
 ```bash
-python3 -m unittest discover -s tests -t .    # ~285 tests, under a minute, no AI calls
+python3 -m unittest discover -s tests -t .    # ~310 tests, under a minute, no AI calls
 python3 -m agent_groupchat --no-browser       # run from the source folder
 ```
 

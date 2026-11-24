@@ -216,6 +216,26 @@ For each user message in a chat with roles:
 If the Tester or Reviewer finds problems, the Lead automatically does **1** round of fixes, then it comes back to you.
 Per-chat setting: 0–3 rounds.
 
+### 6.2b Loose ends
+Leads (also in fix rounds) and Race/Split agents are asked to end with a `LOOSE ENDS:` line and one `- item` per line
+for anything unfinished or temporary (TODOs, shortcuts, skipped cases), or to leave it out. The server moves that list
+into `meta.loose_ends` (up to 15 items, 300 characters each; inline `code` kept; "none" means none); the page shows it as
+a ⚠ checklist under the reply and on the copy's card in a Race/Split, so it's seen before **Use this one**. Testers and
+Reviewers in the workflow are told the Leads' loose ends and asked whether they matter. A reply that is only the list
+stays as it is. A `CHOICES:` line may follow the list (it's always the last line).
+
+### 6.2d Stop
+**■ Stop** stops what runs: the agents' replies, a running workflow stage, Race/Split stage or Debate. What only waits
+for you stays: a plan waiting for **Go ahead** (its later-stage agents go back to the request, so they still get it
+and the plan) and Split parts waiting for the OK. **Go ahead** clears the stop. A reply you stopped is never asked
+again by itself and keeps its *stopped* label (later turns may still read the message as context, but its `/skill`
+doesn't run); **↻ Retry** re-asks it.
+
+### 6.2c Hand-off pause
+Hand-offs (an agent addressing another) stop after 3 (`MAX_HANDOFFS`, counting each agent asked, so a reply that
+addresses two agents uses two). If someone is still addressed then, the
+chat says so ("⏸️ Paused after 3 hand-offs… reply to let them go on") instead of stopping silently.
+
 ### 6.3 Editing agents take turns
 Agents that can edit run **one at a time** (edit lock). talk/read agents run in parallel.
 Leads and Testers that wait for their turn read the chat when the turn starts (§4.4).
@@ -260,6 +280,24 @@ Each agent shows a badge with its name, role(s), permission level, and ⚠ if ra
   lists the options. Race/Split copy replies don't get buttons.
 
 ---
+
+### 7.5 ⚖ Debate
+A button next to 🧩 Split (2+ agents): the message box text is debated instead of answered. Agents get stances in
+chat order: For, Against, Neutral, For… Round 1: each makes its case; round 2: each answers the others' strongest
+points (both rounds in parallel, each sees everything posted before); then a judge gives an impartial verdict (the
+first Critic, else the first Planner, else the Neutral agent, else the first agent), ending with `CHOICES:` when the
+user has to pick. Everyone is capped at **Read** (nobody changes files) and the workflow, Race and Split aren't used.
+About 2 × agents + 1 turns. Stop ends it; debate replies can't be retried (start a new one); a restart drops a
+Debate that was running. It can't start while a Split's parts wait for your OK. What you write while it runs isn't
+taken into the debate: debaters read the chat only up to your next message, which is answered on its own afterwards.
+
+### 7.6 💬 Comments on diff lines
+In a reply's **▸ Diff**, every added, removed and context line is clickable (file and line number come from the
+diff's hunk headers; removed lines use the old line number). A comment goes into a tray above the message box (it
+survives the chat redrawing); several can be collected, for several agents. **Send N comments to X** posts one message
+to that agent only (`reply_to`), e.g. ``@claude Review comments on your changes: - `app.py` line 42 (`return x`):
+handle None``. Commented lines are marked. Diffs of Race/Split copies aren't commentable (their changes live in the
+copy). Switching chats throws unsent comments away.
 
 ## 8. Storage
 Everything lives in **`~/.agent-groupchat/`** on all 3 OSes: `config.json` (agents, roles, teams), `chats/`, `logs/`.
