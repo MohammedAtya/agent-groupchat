@@ -128,6 +128,7 @@ def migrate(c):
     c.setdefault("lock", False)
     c.setdefault("fix_rounds", 1)
     c.setdefault("flow", None)
+    c["debate"] = None  # (a Debate interrupted by a restart isn't picked up half-way)
     r = c.get("race")
     if r:
         r.setdefault("scope", (r.get("sub") or ".").replace(os.sep, "/"))
@@ -663,7 +664,9 @@ def intro(bot, chat, folder=None):
         + (f" or the other AIs directly (@{others[0]['id']} reaches that one only)" if others else "")
         + ". Never prefix your reply with your own name. "
         f"If you are shown only other AIs' replies and have nothing useful to add, "
-        f"reply with exactly {PASS}."
+        f"reply with exactly {PASS}. "
+        "If the user has to choose between a few options, end your reply with one line: "
+        "CHOICES: first option | second option (2 to 5 short options); they appear as buttons."
         + ad.intro_note
     )
 
@@ -776,10 +779,12 @@ def has_flow(chat):
 def route(chat, m):
     """Who answers a user message directly: (agents, flow). flow=True means a plain message
     in a chat with roles: the participants answer it directly and the workflow does the rest."""
-    if m.get("mode") in ("race", "split", "split-feedback"):  # handled by step_race
+    if m.get("mode") in ("race", "split", "split-feedback", "debate"):  # step_race / step_debate
         return [], False
     if m.get("mode") == "no-split":  # the Lead's flow, or just one agent
         return ([] if m.get("flow") else [m["only"]]), False
+    if m.get("reply_to") in agent_ids(chat):  # a decision button: that agent only, whatever it says
+        return [m["reply_to"]], False
     ids = agent_ids(chat)
     sk, at = m.get("skill"), mentioned(chat, m["text"])
     # @name anywhere addresses only those agents; the others stay silent and read it as
@@ -996,10 +1001,11 @@ def make_diff(before, files, folder):
         if old is None or new is None:
             part = f"--- {name}\n(binary or large file: no diff)\n"
         else:
-            part = "".join(difflib.unified_diff(
-                old.splitlines(True), new.splitlines(True),
-                "/dev/null" if not existed else f"a/{name}",
-                "/dev/null" if f.endswith(" (deleted)") else f"b/{name}"))
+            part = "".join(x if x.endswith("\n") else x + "\n\\ No newline at end of file\n"
+                           for x in difflib.unified_diff(
+                               old.splitlines(True), new.splitlines(True),
+                               "/dev/null" if not existed else f"a/{name}",
+                               "/dev/null" if f.endswith(" (deleted)") else f"b/{name}"))
             if part and not part.endswith("\n"):
                 part += "\n"
         if total + len(part) > MAX_DIFF:
@@ -1057,13 +1063,74 @@ def verdict(text):
     return found[-1].upper() if found else None
 
 
+MAX_CHOICES, MAX_CHOICE_LEN = 5, 80
+
+
+def split_choices(text):
+    """'…\nCHOICES: Yes | No | Show me first' at the end of a reply -> (text without that
+    line, ["Yes", "No", "Show me first"]); (text, None) if there's no valid choices line."""
+    lines = (text or "").rstrip().split("\n")
+    m = re.match(r"(?i)^choices\s*:\s*(.+)$", lines[-1].strip().strip("*`_ ").strip())
+    if not m:
+        return text, None
+    options = []
+    for o in m.group(1).split("|"):
+        o = o.strip().strip("*`_ \"'").strip()
+        if o and o.lower() not in (x.lower() for x in options):
+            options.append(o)
+    if not 2 <= len(options) <= MAX_CHOICES or any(len(o) > MAX_CHOICE_LEN for o in options):
+        return text, None
+    return "\n".join(lines[:-1]).rstrip(), options
+
+
+MAX_LOOSE_ENDS, MAX_LOOSE_END_LEN = 15, 300
+LOOSE_HEAD = re.compile(r"(?i)^\W{0,4}loose ends\W{0,4}:?\W{0,4}$")
+LOOSE_ITEM = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s+(.+?)\s*$")
+LOOSE_NOTE = (" If anything is left unfinished or temporary (TODOs, shortcuts, cases you skipped, "
+              "things to check), list it at the very end under a line LOOSE ENDS: with one '- item' "
+              "per line; leave it out if there's nothing.")
+
+
+def split_loose_ends(text):
+    """'…\nLOOSE ENDS:\n- no tests for X\n- TODO in api.py' at the end of a reply -> (text
+    without that list, ["no tests for X", "TODO in api.py"]); (text, None) if there's none."""
+    lines = (text or "").rstrip().split("\n")
+    for i in range(len(lines) - 1, max(-1, len(lines) - MAX_LOOSE_ENDS - 3), -1):
+        if LOOSE_HEAD.match(lines[i].strip()):
+            items = [LOOSE_ITEM.match(x) for x in lines[i + 1:]]
+            if not lines[i + 1:] or not all(items) or len(items) > MAX_LOOSE_ENDS:
+                return text, None
+            found = [m.group(1).strip()[:MAX_LOOSE_END_LEN] for m in items]  # (inline `code` stays)
+            found = [x for x in found if x and x.lower() not in ("none", "nothing", "n/a")]
+            return "\n".join(lines[:i]).rstrip(), (found or None)
+    return text, None
+
+
+def take_endings(reply, meta):
+    """Move a reply's trailing CHOICES: line and LOOSE ENDS: list into meta (shown as buttons
+    and a checklist). A reply that is nothing but those stays as it is."""
+    if outcome(reply) != "done":
+        return reply
+    shown, choices = split_choices(reply)
+    shown, loose = split_loose_ends(shown)
+    if not shown.strip():
+        return reply
+    if choices:
+        meta["choices"] = choices
+    if loose:
+        meta["loose_ends"] = loose
+    return shown
+
+
 ROLE_VERB = {"plan": "planning", "work": "working", "test": "testing", "review": "reviewing"}
 
 
 def build_prompt(chat, bot, msgs, extra=""):
     """The turn's prompt: changes to its role/permissions, the new messages, then `extra`."""
     note = note_changes(chat, bot)
-    last_user = next((m for m in reversed(msgs) if m["who"] == "user"), None)
+    # (a message whose reply you stopped is only context: its /skill doesn't run)
+    last_user = next((m for m in reversed(msgs) if m["who"] == "user"
+                      and (m.get("status") or {}).get(bot) != "stopped"), None)
     sk = last_user.get("skill") if last_user else None
     if sk and agent(chat, bot)["adapter"] not in skill_adapters(sk):
         sk = None
@@ -1086,20 +1153,30 @@ def build_prompt(chat, bot, msgs, extra=""):
     return note + extra.strip()
 
 
-def ask(chat, bot, extra="", cap=None, role=None, stage="", force=False, race=False):
+def answerable(chat, bot, users):
+    """Your messages this turn answers: not those whose reply to `bot` you stopped (they stay
+    'stopped'; a Retry re-queues them first)."""
+    with lock:
+        return [i for i in users if (chat["messages"][i].get("status") or {}).get(bot) != "stopped"]
+
+
+def ask(chat, bot, extra="", cap=None, role=None, stage="", force=False, race=False, until=None):
     """Give `bot` everything it hasn't seen yet (plus `extra`) and post its reply.
     cap: highest permission level for this turn (e.g. "read" for a summary).
     role/stage: which role it answers in (shown under the reply; drives warnings/verdicts).
     force: ask even if there's nothing new (an agent with two roles, e.g. Lead + Tester).
-    extra: text added after the messages, or a function that writes it when the turn starts."""
+    extra: text added after the messages, or a function that writes it when the turn starts.
+    until: read the chat only up to the first user message from this index on (a Debate: what you
+    write meanwhile isn't taken into the debate; it's answered on its own afterwards)."""
     # Leads and Testers that share the role take turns on the same task: one that waited for
     # its turn reads the chat only then, so it sees what the one before it said and changed
     # (SPEC §4.4). Everyone else answers independently, as the intro says.
     late = stage in ("work", "test")
     if callable(extra) and not late:  # extra may be written when the turn starts (stage notes)
         extra = extra()
-    known = len(chat["messages"])
-    users, msgs = unseen_for(chat, bot, peek=late)
+    known = len(chat["messages"]) if until is None else until
+    users, msgs = unseen_for(chat, bot, peek=late, **({"known": until, "stage": stage} if until is not None else {}))
+    users = answerable(chat, bot, users)
     if not msgs and not force:
         return None
     set_status(chat, users, bot, "running")
@@ -1124,6 +1201,7 @@ def ask(chat, bot, extra="", cap=None, role=None, stage="", force=False, race=Fa
         if late:
             extra = extra() if callable(extra) else extra
             users, msgs = unseen_for(chat, bot, known=known, stage=stage)
+            users = answerable(chat, bot, users)
             set_status(chat, users, bot, "running")
             prompt = build_prompt(chat, bot, msgs, extra)
         if chat["id"] not in halted:
@@ -1177,6 +1255,7 @@ def ask(chat, bot, extra="", cap=None, role=None, stage="", force=False, race=Fa
         if diff:
             meta["diff"] = [diff.count("\n+") - diff.count("\n+++"),
                             diff.count("\n-") - diff.count("\n---")]
+        reply = take_endings(reply, meta)
         idx = add_msg(chat, bot, reply, meta=meta)
         if diff and not chat.get("deleted"):
             os.makedirs(os.path.dirname(diff_path(chat["id"], idx)), exist_ok=True)
@@ -1226,7 +1305,9 @@ def pending(chat):
                 continue
             sk = m.get("skill")
             want, _ = route(chat, m)
-            targets += [b for b in want if chat["seen"].get(b, 0) <= i and b not in targets]
+            stopped = {b for b, st in (m.get("status") or {}).items() if st == "stopped"}
+            targets += [b for b in want if chat["seen"].get(b, 0) <= i and b not in targets
+                        and b not in stopped]  # (you stopped that reply: not asked again)
         return [b for b in agent_ids(chat) if b in targets], sk
 
 
@@ -1279,16 +1360,20 @@ def stage_note(chat, bot, stage, f):
                     if len(leads) > 1 else f" (your focus: {focus})")
             return (f"\n\n(Workflow · Lead, fix round {f['fix']} of {chat.get('fix_rounds', 1)}: "
                     f"the Tester/Reviewer found problems above. Fix them{mine}, then say briefly "
-                    f"what you changed.{turns} {then})")
+                    f"what you changed.{turns} {then}{LOOSE_NOTE})")
         plan = " following the plan above" if "plan" in f["stages"] else ""
         part = f", your part only: {focus}" if focus else ""
         return (f"\n\n(Workflow · Lead: do the work for the user's latest request now{plan}"
-                f"{part}.{turns} {then})")
+                f"{part}.{turns} {then}{LOOSE_NOTE})")
     area = f" Your focus: {focus}. Check that area only." if focus else ""
     files = sorted({x for m in chat["messages"][f["msg"]:] if m["who"] in leads
                     for x in (m.get("meta") or {}).get("files") or []})
+    loose = [x for m in chat["messages"][f["msg"]:] if m["who"] in leads
+             for x in (m.get("meta") or {}).get("loose_ends") or []]
     did = (f"{names_of(chat, leads)} just did the work above"
            + (f" (files changed: {', '.join(files)})" if files else "") + "."
+           + (" They listed these loose ends; check whether they matter: "
+              + "; ".join(loose[:MAX_LOOSE_ENDS]) + "." if loose else "")
            if leads else "Look at the user's latest request above.")
     end = ("End your reply with exactly one line: VERDICT: LGTM if nothing needs fixing, or "
            "VERDICT: FIX if the Lead must change something."
@@ -1315,12 +1400,15 @@ def flow_agents(chat):
     return [b for b in agent_ids(chat) if b in inflow]
 
 
-def post_user_message(chat, text, sk=None):
+def post_user_message(chat, text, sk=None, reply_to=None):
     """Add a user message. A plain message in a chat with roles starts the workflow, or,
-    while the plan waits for your OK, goes back to the Planners as feedback."""
+    while the plan waits for your OK, goes back to the Planners as feedback.
+    reply_to: an agent id (a decision button): only that agent gets it."""
     with lock:
         halted.discard(chat["id"])
         extra = {"skill": sk} if sk else {}
+        if reply_to in agent_ids(chat):
+            extra["reply_to"] = reply_to
         want, flow = route(chat, {"text": text, **extra})
         f = chat.get("flow")
         if flow and f and f.get("waiting") and "plan" in f["stages"]:  # feedback on the plan
@@ -1363,6 +1451,7 @@ def go_ahead(chat):
         f = chat.get("flow")
         if not f or not f.get("waiting"):
             return False
+        halted.discard(chat["id"])  # a Stop of something else meanwhile doesn't stop this
         f["waiting"] = False
         f["i"] += 1
         for i in range(f["msg"], len(chat["messages"])):
@@ -1435,6 +1524,90 @@ def step_flow(chat):
     return True
 
 
+# ---------------------------------------------------------------- ⚖ Debate (SPEC §7.5)
+# Every agent gets a stance (For, Against, Neutral, For…): openings, then rebuttals, then an
+# impartial verdict by the Critic, else the Planner, else the Neutral one, else the first agent.
+# Talk only: everyone is capped at Read, and nothing goes through the workflow.
+STANCES = ["For", "Against", "Neutral"]
+STANCE_JOB = {"For": "argue FOR it: the strongest honest case in favour",
+              "Against": "argue AGAINST it: the strongest honest case against",
+              "Neutral": "weigh both sides and say what the answer depends on"}
+DEBATE_OPEN = ("\n\n(⚖ Debate, round 1 of 2 · {stance}: the user wants the question above debated. "
+               "You {job}. Give your case in a few short points. Don't change any files.)")
+DEBATE_REBUT = ("\n\n(⚖ Debate, round 2 of 2 · {stance}: answer the strongest points of the other "
+                "side(s) above, concede what's right, and keep your stance. Be brief. Don't change "
+                "any files.)")
+DEBATE_VERDICT = ("\n\n(⚖ Debate · verdict: you are the judge now. Be impartial, even if you argued a "
+                  "side. Sum up the strongest points of each side, say which way you'd go and why, "
+                  "and what would change your mind. If the user has to pick between options, end "
+                  "with a CHOICES: line.)")
+
+
+def debate_check(chat):
+    """'' if a Debate can start now, else why not (shown on the greyed-out ⚖ Debate button)."""
+    if len(chat["agents"]) < 2:
+        return "needs 2 or more agents"
+    if chat["id"] in workers or chat.get("debate") or (chat.get("race") or {}).get("stage") in RUNNING:
+        return "wait until the agents have finished"
+    if split_waiting(chat):
+        return "the Split's parts wait for your OK first: go ahead, reply to change them, or discard them"
+    return ""
+
+
+def debate_judge(chat, stances):
+    for role in ("critic", "planner"):
+        b = next((x for x in agent_ids(chat) if has_role(chat, x, role)), None)
+        if b:
+            return b
+    return next((b for b, st in stances.items() if st == "Neutral"), agent_ids(chat)[0])
+
+
+def start_debate(chat, text):
+    why = debate_check(chat)
+    if why:
+        raise ValueError(f"⚖ Debate isn't possible now: {why}.")
+    end_flow(chat, "skipped")
+    ids = agent_ids(chat)
+    stances = {b: STANCES[i % len(STANCES)] for i, b in enumerate(ids)}
+    with lock:
+        halted.discard(chat["id"])
+        idx = add_msg(chat, "user", text, mode="debate", to=ids, status={b: "queued" for b in ids})
+        chat["debate"] = {"msg": idx, "stances": stances, "judge": debate_judge(chat, stances),
+                          "stage": "open"}
+        save(chat)
+
+
+def step_debate(chat):
+    """Run the whole Debate (openings, rebuttals, verdict). -> True if there was one."""
+    d = chat.get("debate")
+    if not d:
+        return False
+    try:
+        for stage, note in (("open", DEBATE_OPEN), ("rebut", DEBATE_REBUT)):
+            if chat["id"] in halted or chat.get("debate") is not d:
+                return True
+            who = [b for b in agent_ids(chat) if b in d["stances"]]
+            with lock:
+                d["stage"] = stage
+            parallel(chat, who,
+                     extras={b: note.format(stance=d["stances"][b], job=STANCE_JOB[d["stances"][b]])
+                             for b in who},
+                     opts={b: {"cap": "read", "role": f"⚖ {d['stances'][b]}", "stage": "debate",
+                               "force": True, "until": d["msg"] + 1} for b in who})
+        if chat["id"] in halted or chat.get("debate") is not d or not agent(chat, d["judge"]):
+            return True
+        with lock:
+            d["stage"] = "verdict"
+        ask(chat, d["judge"], DEBATE_VERDICT, cap="read", role="⚖ Verdict", stage="debate", force=True,
+            until=d["msg"] + 1)
+    finally:
+        with lock:
+            if chat.get("debate") is d:
+                chat["debate"] = None
+                save(chat)
+    return True
+
+
 # ---------------------------------------------------------------- ⚡ Race (SPEC §14)
 # Every agent that can edit (Leads and agents without a workflow role) does the same task at
 # the same time, each in its own copy of the project (a git worktree). Then the Tester runs
@@ -1501,7 +1674,8 @@ def race_view(chat):
     r = chat.get("race")
     if not r:
         return None
-    keep = ("agent", "name", "status", "files", "diff", "tests", "test_warn", "msg", "from", "part", "warn")
+    keep = ("agent", "name", "status", "files", "diff", "tests", "test_warn", "msg", "from", "part", "warn",
+            "loose_ends")
     return {"kind": r.get("kind", "race"), "parts": r.get("parts"), "fix": r.get("fix", 0),
             "interrupted": r.get("interrupted", False),
             "stage": r["stage"], "msg": r["msg"], "pick": r.get("pick"), "used": r.get("used"),
@@ -1655,12 +1829,86 @@ def post_copy_reply(chat, r, bot, name, reply, meta, markers=False):
     else:
         c["status"] = "done" if c["files"] else "empty"
     meta.update(copy=name, files=c["files"], **({"diff": c["diff"]} if text else {}))
+    if outcome(reply) == "done":
+        body, choices = split_choices(reply)
+        body, loose = split_loose_ends(body)
+        if loose and body.strip():  # (a choices line stays as text: copies get no buttons)
+            reply = body + ("\n\nCHOICES: " + " | ".join(choices) if choices else "")
+            meta["loose_ends"] = c["loose_ends"] = loose
     idx = add_msg(chat, bot, reply, meta=meta)
     c["msg"] = idx
     if text and not chat.get("deleted"):
         os.makedirs(os.path.dirname(diff_path(chat["id"], idx)), exist_ok=True)
         with open(diff_path(chat["id"], idx), "w", encoding="utf-8") as f:
             f.write(text[:MAX_DIFF])
+
+
+def human_size(n):
+    for unit in ("bytes", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:.0f} {unit}" if unit == "bytes" else f"{n:.1f} {unit}"
+        n /= 1024
+
+
+def bring_ignored(chat, r, c):
+    """Copy the user's git-ignored files (.env, node_modules, .venv…) into copy `c`, so tests
+    can run there (SPEC §14.5b). The first copy tells the chat what came along.
+    -> False if the copy couldn't be made safe: then it's an error and nobody works in it."""
+    try:
+        info = copies.copy_ignored(chat["folder"], c["folder"])
+    except OSError as e:
+        c["status"] = "error"
+        # tagged like the turn it replaces: a racer / a part can be retried, a combined copy can't
+        kind = ("combine", "⚡ Combine") if "from" in c else ("part", "🧩 Split") if "part" in c \
+            else ("race", "⚡ Race")
+        name = next((n for n, x in r["copies"].items() if x is c), c["agent"])
+        add_msg(chat, c["agent"], f"(error) {c['name']}'s copy couldn't be made safe to use "
+                                  f"(copying your git-ignored files: {e}), so it isn't used.",
+                meta={"role": kind[1], "stage": kind[0], "copy": name})
+        if kind[0] != "combine":
+            set_status(chat, [r["msg"]], c["agent"], "error")
+        return False
+    with lock:
+        first = "ignored" not in r
+        if first:
+            r["ignored"] = {k: info[k] for k in ("names", "skipped", "files", "bytes", "links", "failed")}
+    if not first or not (info["names"] or info["skipped"] or info["links"] or info["failed"]):
+        return True
+    names = ", ".join(info["names"][:6]) + (f" and {len(info['names']) - 6} more"
+                                             if len(info["names"]) > 6 else "")
+    text = (f"Your git-ignored files were copied into each copy so tests can run there: {names} "
+            f"({info['files']} files, {human_size(info['bytes'])}). They stay out of what you Use."
+            if info["names"] else "")
+    if info["skipped"]:
+        text += (" " if text else "") + "Not copied (too big): " + skipped_text(info["skipped"]) + "."
+    if info["links"]:
+        text += ((" " if text else "") + "Not copied (links that lead outside the copy): "
+                 + ", ".join(info["links"][:6]) + (f" and {len(info['links']) - 6} more"
+                                                   if len(info["links"]) > 6 else "") + ".")
+    if info["failed"]:
+        text += (" " if text else "") + "Couldn't be copied: " + ", ".join(info["failed"][:6]) + "."
+    add_msg(chat, "system", text)
+    return True
+
+
+def skipped_text(skipped):
+    return ", ".join(f"{n} ({human_size(b) if b is not None else 'over ' + human_size(copies.MAX_IGNORED_BYTES)})"
+                     for n, b in skipped[:6]) + (f" and {len(skipped) - 6} more" if len(skipped) > 6 else "")
+
+
+def loose_note():
+    return "\n\n(" + LOOSE_NOTE.strip() + ")"
+
+
+def ignored_note(r):
+    """Told to agents in copies: ignored folders that were too big to copy."""
+    skipped = (r.get("ignored") or {}).get("skipped") or []
+    if not skipped:
+        return ""
+    return ("\n\n(Not in this copy because they're too big: " + skipped_text(skipped)
+            + ". The user's project has them but git ignores them. If you need them (e.g. "
+            "installed dependencies) install or build them here if your permissions allow; "
+            "otherwise say so.)")
 
 
 def open_copy(chat, r, name, agent_id, extra=None):
@@ -1681,6 +1929,8 @@ def open_copy(chat, r, name, agent_id, extra=None):
     if chat.get("deleted") or chat.get("race") is not r:
         copies.remove_copies(r["root"], [path], [branch])
         return None
+    if not bring_ignored(chat, r, c):
+        return None
     return c
 
 
@@ -1690,7 +1940,7 @@ def run_racer(chat, r, b, context, task):
         return
     others = names_of(chat, [x for x in r["racers"] if x != b]) or "the others"
     prompt = ((context + "\n\n") if context else "") + f"[User]: {task}" + \
-        RACE_NOTE.format(others=others, folder=c["folder"])
+        RACE_NOTE.format(others=others, folder=c["folder"]) + ignored_note(r) + loose_note()
     reply, meta = ask_copy(chat, b, c["folder"], prompt, "⚡ Race", "race", [r["msg"]])
     post_copy_reply(chat, r, b, b, reply, meta)
 
@@ -1715,7 +1965,8 @@ def race_test(chat, r):
                     or (only and name not in only):
                 continue
             before = copies.head(c["path"])
-            prompt = f"[User]: {task}" + RACE_TEST_NOTE.format(folder=c["folder"], name=c["name"])
+            prompt = f"[User]: {task}" + RACE_TEST_NOTE.format(folder=c["folder"], name=c["name"]) \
+                + ignored_note(r)
             reply, meta = ask_copy(chat, tester, c["folder"], prompt,
                                    f"Tester · {c['name']}'s copy", "test", [r["msg"]])
             meta["copy"] = name
@@ -1777,6 +2028,8 @@ def merge_into_result(chat, r, names, fixer):
         return None, str(e)
     c["folder"] = path if r["scope"] == "." else os.path.join(path, *r["scope"].split("/"))
     c["key"], c["conflicts"], c["merged_at"] = name, conflicts, copies.head(path)
+    if not bring_ignored(chat, r, c):
+        return None, "the combined copy couldn't be made safe"
     return c, conflicts
 
 
@@ -1793,7 +2046,7 @@ def race_combine(chat, r):
     prompt = f"[User]: {task}" + COMBINE_NOTE.format(
         names=c["label"], folder=c["folder"],
         conflicts=f"; these files still have conflict markers: {', '.join(conflicts)}"
-        if conflicts else " without conflicts")
+        if conflicts else " without conflicts") + ignored_note(r)
     reply, meta = ask_copy(chat, fixer, c["folder"], prompt, "⚡ Combine", "combine", [])
     post_copy_reply(chat, r, fixer, c["key"], reply, meta, markers=True)
 
@@ -2016,6 +2269,7 @@ def split_go(chat):
     with lock:
         if not split_waiting(chat):
             return False
+        halted.discard(chat["id"])  # a Stop of something else meanwhile doesn't stop this
         r = chat["race"]
         r["stage"] = "parts"
         for b in r["racers"] + checkers_of(chat, r["racers"]):
@@ -2091,7 +2345,8 @@ def run_part(chat, r, b, context, task):
         return
     others = "; ".join(f"{display(chat, x)}: {t}" for x, t in r["parts"].items() if x != b) or "none"
     prompt = ((context + "\n\n") if context else "") + f"[User]: {task}" + \
-        SPLIT_PART_NOTE.format(part=r["parts"][b], others=others, folder=c["folder"])
+        SPLIT_PART_NOTE.format(part=r["parts"][b], others=others, folder=c["folder"]) + ignored_note(r) \
+        + loose_note()
     reply, meta = ask_copy(chat, b, c["folder"], prompt, "🧩 Part", "part", [r["msg"]])
     post_copy_reply(chat, r, b, b, reply, meta)
 
@@ -2131,7 +2386,7 @@ def split_merge(chat, r):
         return "stopped"
     if conflicts:
         prompt = f"[User]: {chat['messages'][r['msg']]['text']}" + SPLIT_MERGE_NOTE.format(
-            parts=c["label"], folder=c["folder"], conflicts=", ".join(conflicts))
+            parts=c["label"], folder=c["folder"], conflicts=", ".join(conflicts)) + ignored_note(r)
         reply, meta = ask_copy(chat, c["agent"], c["folder"], prompt, "🧩 Merge", "combine", [])
         post_copy_reply(chat, r, c["agent"], c["key"], reply, meta, markers=True)
         if c["status"] != "done":
@@ -2157,7 +2412,8 @@ def split_check_result(chat, r):
     for tester in [b for b in stage_agents(chat, "test") if b not in r["parts"]][:1]:
         before = copies.head(c["path"])
         reply, meta = ask_copy(chat, tester, c["folder"], f"[User]: {task}" +
-                               SPLIT_TEST_NOTE.format(folder=c["folder"]), "Tester · 🧩 Split", "test", [r["msg"]])
+                               SPLIT_TEST_NOTE.format(folder=c["folder"]) + ignored_note(r),
+                               "Tester · 🧩 Split", "test", [r["msg"]])
         copies.save_copy(c["path"], "tests")
         changed = [p for _, p in copies.name_status(c["path"], before, "HEAD")]
         other = [f for f in changed if not is_test_file(f)]
@@ -2269,17 +2525,27 @@ def handoffs(chat, skip):
     @-addressed to only some of them (e.g. read-only Codex asking Claude to write files).
     Agents in `skip` already answered the user; for them only Discussion rounds apply, so
     'Codex, your turn' in a reply to everyone doesn't trigger a second answer."""
-    for _ in range(MAX_HANDOFFS):
+    def addressed_now():
+        with lock:
+            return [b for b in agent_ids(chat) if b not in skip
+                    and any(m["who"] not in ("user", b) and addressed(chat, m["text"], b)
+                            for m in chat["messages"][chat["seen"].get(b, 0):])]
+    budget = MAX_HANDOFFS
+    while budget:
         if user_waiting(chat):
             return
-        with lock:
-            to = [b for b in agent_ids(chat) if b not in skip
-                  and any(m["who"] not in ("user", b) and addressed(chat, m["text"], b)
-                         for m in chat["messages"][chat["seen"].get(b, 0):])]
+        to = addressed_now()
         if not to:
             return
-        for b in to:
+        for b in to[:budget]:
             ask(chat, b, HANDOFF_NOTE)
+            budget -= 1
+    left = addressed_now()
+    if left and not user_waiting(chat):  # they'd go on: say so instead of stopping silently
+        add_msg(chat, "system", f"⏸️ Paused after {MAX_HANDOFFS} hand-offs between the agents, so they "
+                                f"don't go back and forth forever. {names_of(chat, left)} "
+                                f"{'was' if len(left) == 1 else 'were'} addressed last: reply (or "
+                                f"@{left[0]} continue) to let them go on.")
 
 
 def worker(chat, first=None):
@@ -2292,14 +2558,29 @@ def worker(chat, first=None):
         while True:
             with lock:
                 if chat["id"] in halted:  # Stop: drop the rest of this turn
+                    # A plan waiting for your OK isn't running: it stays, and the agents of its later
+                    # stages keep their place (they still need your request and the plan).
+                    f = chat.get("flow")
+                    keep = bool(f and f.get("waiting"))
+                    later = {b for st in f["stages"][f["i"] + 1:] for b in stage_agents(chat, st)} \
+                        if keep else set()
                     for i, m in enumerate(chat["messages"]):
                         for b, st in (m.get("status") or {}).items():
-                            if st in ("queued", "running", "waiting"):
+                            if st in ("queued", "running") or (st == "waiting" and not keep):
                                 m["status"][b] = "stopped"
                     for b in agent_ids(chat):
                         chat["seen"][b] = len(chat["messages"])
-                    chat["flow"] = None
-                    if chat.get("race") and chat["race"]["stage"] not in ("done", "stopped"):
+                    if keep:  # they re-read the request and the plan when their stage comes
+                        req = chat["messages"][f["msg"]]
+                        for b in later:
+                            chat["seen"][b] = min(chat["seen"][b], f["msg"])
+                            if b in req.get("to", []):
+                                req.setdefault("status", {})[b] = "waiting"
+                    if not keep:
+                        chat["flow"] = None
+                    chat["debate"] = None
+                    # a Race/Split that runs stops; one waiting for your OK (nothing runs) stays
+                    if chat.get("race") and chat["race"]["stage"] in RUNNING:
                         chat["race"]["stage"] = "stopped"
                     save(chat)
                     if workers.get(chat["id"]) is me:
@@ -2312,6 +2593,8 @@ def worker(chat, first=None):
                 if len(parts) >= 2 and not sk:  # no auto back-and-forth during a skill
                     discuss(chat, parts)
                 handoffs(chat, targets)
+                continue
+            if step_debate(chat):
                 continue
             if step_race(chat):
                 continue
@@ -2330,10 +2613,10 @@ def worker(chat, first=None):
 
 
 def has_work(chat):
-    """Is there anything for the worker to do (a reply owed, a Race/Split or flow stage)?"""
+    """Is there anything for the worker to do (a reply owed, a Debate, a Race/Split or flow stage)?"""
     if chat["id"] in halted:
         return False
-    if pending(chat)[0]:
+    if pending(chat)[0] or chat.get("debate"):
         return True
     r = chat.get("race")
     if r and r["stage"] in RUNNING:
@@ -2355,6 +2638,8 @@ def kick(chat, first=None):
 def retry_block(chat, idx):
     """'' if the failed reply `idx` can be retried, else why not."""
     meta = chat["messages"][idx].get("meta") or {}
+    if meta.get("stage") == "debate":
+        return "start a new ⚖ Debate for this (a retry would answer outside the debate)"
     if meta.get("race"):
         return ("this reply was part of a Race/Split; start a new one (or Discard), because a retry "
                 "would run in your real folder")
@@ -2448,6 +2733,8 @@ def export_md(chat):
         r = (m.get("meta") or {}).get("role")
         role = " (chat summary)" if r == "summary" else f" ({r})" if r else ""
         out += [f"## {names.get(m['who'], m['who'])}{role} · {when}", "", m["text"], ""]
+        if (m.get("meta") or {}).get("choices"):
+            out += ["Choices: " + " · ".join(f"[{o}]" for o in m["meta"]["choices"]), ""]
     return "\n".join(out)
 
 
@@ -2490,7 +2777,8 @@ class Handler(BaseHTTPRequestHandler):
             config_error = refresh_adapters()
             with lock:
                 lst = sorted(({**{k: c[k] for k in ("id", "title", "updated", "folder", "lock")},
-                               "agents": len(c["agents"])}
+                               "agents": len(c["agents"]),
+                               "count": sum(1 for m in c["messages"] if not m.get("hidden"))}
                               for c in chats.values()), key=lambda c: -c["updated"])
             return self.send_json({"chats": lst, "home": os.path.expanduser("~"),
                                    "sandbox": sandbox_ok(),
@@ -2577,6 +2865,7 @@ class Handler(BaseHTTPRequestHandler):
                                        "race": race_view(c), "race_block": race_check(c),
                                        "racers": racers(c),
                                        "split_block": split_check(c),
+                                       "debate_block": debate_check(c),
                                        "split_planner": not split_check(c, by_planner=True),
                                        "colors": {a["id"]: get_adapter(a["adapter"]).color
                                                   for a in c["agents"]},
@@ -2651,6 +2940,7 @@ class Handler(BaseHTTPRequestHandler):
             if not text:
                 return self.send_json({"error": "empty"}, 400)
             sk = parse_skill(text, c["folder"])
+            reply_to = d.get("reply_to") if d.get("reply_to") in agent_ids(c) else None
             with lock:
                 halted.discard(c["id"])
             r = c.get("race")
@@ -2659,15 +2949,21 @@ class Handler(BaseHTTPRequestHandler):
                     start_race(c, text)
                 except (ValueError, copies.GitError) as e:
                     return self.send_json({"error": str(e)}, 400)
+            elif d.get("mode") == "debate":
+                try:
+                    start_debate(c, text)
+                except ValueError as e:
+                    return self.send_json({"error": str(e)}, 400)
             elif d.get("mode") == "split":
                 try:
                     start_split(c, text, d.get("parts") if d.get("split") == "own" else None)
                 except (ValueError, copies.GitError) as e:
                     return self.send_json({"error": str(e)}, 400)
-            elif split_waiting(c) and not sk and mentioned(c, text) in ([], [r["planner"]]):
+            elif split_waiting(c) and not sk and (reply_to == r["planner"] if reply_to else
+                                                  mentioned(c, text) in ([], [r["planner"]])):
                 split_feedback(c, text)  # a reply to the Planner's parts: it revises them
             else:
-                post_user_message(c, text, sk)
+                post_user_message(c, text, sk, reply_to)
             kick(c)
         elif action in ("retry", "compact"):
             if c["id"] in workers:
@@ -2707,11 +3003,12 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as e:
                 return self.send_json({"error": str(e)}, 400)
         elif action == "stop":
-            if split_waiting(c):  # nothing runs yet: cancel the Split
+            if split_waiting(c) and c["id"] not in workers and not c.get("debate"):  # cancel the Split
                 cancel_split(c)
                 return self.send_json({"ok": True})
             with lock:  # kill running agents and cancel the rest of this turn
-                end_flow(c, "stopped")
+                if not (c.get("flow") or {}).get("waiting"):  # a plan waiting for your OK stays
+                    end_flow(c, "stopped")
                 if c["id"] in workers:
                     halted.add(c["id"])
                 running = [procs.get((c["id"], b)) for b in agent_ids(c)]

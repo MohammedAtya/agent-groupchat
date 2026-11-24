@@ -216,6 +216,26 @@ For each user message in a chat with roles:
 If the Tester or Reviewer finds problems, the Lead automatically does **1** round of fixes, then it comes back to you.
 Per-chat setting: 0–3 rounds.
 
+### 6.2b Loose ends
+Leads (also in fix rounds) and Race/Split agents are asked to end with a `LOOSE ENDS:` line and one `- item` per line
+for anything unfinished or temporary (TODOs, shortcuts, skipped cases), or to leave it out. The server moves that list
+into `meta.loose_ends` (up to 15 items, 300 characters each; inline `code` kept; "none" means none); the page shows it as
+a ⚠ checklist under the reply and on the copy's card in a Race/Split, so it's seen before **Use this one**. Testers and
+Reviewers in the workflow are told the Leads' loose ends and asked whether they matter. A reply that is only the list
+stays as it is. A `CHOICES:` line may follow the list (it's always the last line).
+
+### 6.2d Stop
+**■ Stop** stops what runs: the agents' replies, a running workflow stage, Race/Split stage or Debate. What only waits
+for you stays: a plan waiting for **Go ahead** (its later-stage agents go back to the request, so they still get it
+and the plan) and Split parts waiting for the OK. **Go ahead** clears the stop. A reply you stopped is never asked
+again by itself and keeps its *stopped* label (later turns may still read the message as context, but its `/skill`
+doesn't run); **↻ Retry** re-asks it.
+
+### 6.2c Hand-off pause
+Hand-offs (an agent addressing another) stop after 3 (`MAX_HANDOFFS`, counting each agent asked, so a reply that
+addresses two agents uses two). If someone is still addressed then, the
+chat says so ("⏸️ Paused after 3 hand-offs… reply to let them go on") instead of stopping silently.
+
 ### 6.3 Editing agents take turns
 Agents that can edit run **one at a time** (edit lock). talk/read agents run in parallel.
 Leads and Testers that wait for their turn read the chat when the turn starts (§4.4).
@@ -244,7 +264,40 @@ roles are warned about under the agents table (§4.4).
 ### 7.3 In the chat
 Each agent shows a badge with its name, role(s), permission level, and ⚠ if raised. 🔒 Talk-only lock button in the header.
 
+### 7.4 Notifications and decision buttons
+- **🔔 in the header** (off by default, remembered in the browser): while the tab is in the background, a short
+  sound plus a desktop notification when the open chat's turn ends (also when it ends between two of the page's
+  checks) ("Claude and Codex replied", "…asked you to
+  choose", "Failed: …"), a plan waits for **Go ahead**, Split parts wait for an OK, or a Race / Split is done. Turning it on
+  asks the browser's permission; if notifications are blocked, the sound and tab title still work.
+- **Tab title** counts replies that arrived while the tab was in the background: `(2) Group Chat` (always on).
+- **Sidebar:** other chats with new messages since you last opened them get a ● and bold title (counted by
+  messages, so renaming a chat doesn't mark it).
+- **Decision buttons:** agents are told they may end a reply with one line `CHOICES: a | b | c` (2–5 options, each
+  up to 80 characters). The server removes that line from the reply and keeps the options (`meta.choices`); the page
+  shows them as buttons under that reply until you send your next message. A click sends `@agent option` with
+  `reply_to`, so it answers that agent only, like **↩ Reply**, even if the option names another agent. An invalid line (1 or 6+ options, too long) stays as plain text; Export
+  lists the options. Race/Split copy replies don't get buttons.
+
 ---
+
+### 7.5 ⚖ Debate
+A button next to 🧩 Split (2+ agents): the message box text is debated instead of answered. Agents get stances in
+chat order: For, Against, Neutral, For… Round 1: each makes its case; round 2: each answers the others' strongest
+points (both rounds in parallel, each sees everything posted before); then a judge gives an impartial verdict (the
+first Critic, else the first Planner, else the Neutral agent, else the first agent), ending with `CHOICES:` when the
+user has to pick. Everyone is capped at **Read** (nobody changes files) and the workflow, Race and Split aren't used.
+About 2 × agents + 1 turns. Stop ends it; debate replies can't be retried (start a new one); a restart drops a
+Debate that was running. It can't start while a Split's parts wait for your OK. What you write while it runs isn't
+taken into the debate: debaters read the chat only up to your next message, which is answered on its own afterwards.
+
+### 7.6 💬 Comments on diff lines
+In a reply's **▸ Diff**, every added, removed and context line is clickable (file and line number come from the
+diff's hunk headers; removed lines use the old line number). A comment goes into a tray above the message box (it
+survives the chat redrawing); several can be collected, for several agents. **Send N comments to X** posts one message
+to that agent only (`reply_to`), e.g. ``@claude Review comments on your changes: - `app.py` line 42 (`return x`):
+handle None``. Commented lines are marked. Diffs of Race/Split copies aren't commentable (their changes live in the
+copy). Switching chats throws unsent comments away.
 
 ## 8. Storage
 Everything lives in **`~/.agent-groupchat/`** on all 3 OSes: `config.json` (agents, roles, teams), `chats/`, `logs/`.
@@ -372,6 +425,21 @@ Two ways for agents that can edit to work **at the same time**, each in **its ow
   that restores it.
 - **Submodules aren't copied** (they're empty in the copies); the chat says so when a Race/Split starts.
 - Projects with **symlinks that lead outside them** can't use Race/Split.
+- **Git-ignored files** (`.env`, `node_modules`, `.venv`, local configs) aren't in the snapshot, so each new copy
+  (racers, parts, and the merged/combined result) gets them copied in: real copies, never links, so an agent can't
+  change the user's files through them. Symlinks among them are copied as links, never followed: an absolute
+  link into the user's project is re-pointed to the same place in the copy (if that exists there), and any link that
+  would still lead out of the copy (to the user's files, elsewhere on disk, or another agent's copy) is removed and
+  named in the chat's note. Links are judged by where their whole chain ends, so the order they're checked in
+  doesn't matter; read-only folders are opened for a moment to remove one. Named pipes, sockets and device files
+  are skipped, and an entry that can't be copied completely is removed again (never half a copy, with unchecked
+  links) and listed as "couldn't be copied". **If a copy can't be made safe** (a link or half copy that can't be deleted), that
+  copy is an error and no agent works in it. Skipped: caches and
+  build output (`__pycache__`, `.pytest_cache`, `dist`, `build`, `target`, `.next`…) and empty folders. Limit per
+  copy: 500 MB / 60,000 files; an entry that would go past it is left out. The first copy posts one note listing
+  what was copied and what was left out (with sizes, or "over 500 MB"), and the agents and Testers in copies are
+  told what's missing so they can install it or say so. The files stay ignored in the copy, so they're never part
+  of what **Use this one** applies.
 
 ### 14.6 Sessions inside copies
 Claude Code and Gemini CLI keep sessions **per folder**, so an agent's chat session can't simply continue inside a

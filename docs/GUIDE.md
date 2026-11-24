@@ -28,6 +28,7 @@ Start small: more agents means more cost and longer turns. Each row is a setup f
 | The full team | **Planner** → **Lead** → **Tester** → **Reviewer** | You OK the plan before any work starts. Give the Tester a cheaper model. |
 | Two areas at once | 2 **Leads** with a **focus** each (`backend` / `frontend`), plus a Reviewer | They take turns and build on each other. Different focuses, or you get the [overlap warning](../README.md#roles-and-the-order-of-turns). |
 | Several testers | 2+ **Testers** with a focus each (`login`, `database`) | Each tests its own area. |
+| A decision, not code (which library, which design) | 2+ agents (a Critic as judge is ideal), then **⚖ Debate** | They argue For / Against / Neutral, answer each other, and the judge recommends, with buttons to choose. |
 | The best of several tries | 2+ agents that can edit, then **⚡ Race** | Same task, separate copies; you pick the winner. |
 | A big task, faster | 2+ agents that can edit (+ a Planner), then **🧩 Split** | The Planner splits the work, or you write each agent's part; the parts are merged and checked. |
 
@@ -50,13 +51,20 @@ Which AI for which role:
 - **After a plan**, press **▶ Go ahead**, or reply to change it. Nothing is edited before that.
 - **Watch, and stop early**: if an agent heads the wrong way, press **■ Stop**, then say what to
   do differently. **↻ Retry** reruns a failed reply.
-- **Check changes with ▸ Diff** under a reply, and in git (`git diff`) before you commit.
+- **Check changes with ▸ Diff** under a reply, and in git (`git diff`) before you commit. Click a
+  line in the diff to comment on it, then **Send** the comments to the agent that made the change.
+- **Read the ⚠ Loose ends** under a Lead's reply (and on Race/Split cards): what it says is still
+  unfinished or temporary.
 - **Change the team any time** with **Team** (roles, focus, permission) or **🔒 Lock** (everyone
   talk-only, e.g. while you discuss a design).
 - **Long chat getting slow or expensive?** **Compact** summarizes it and the agents continue in
   fresh sessions.
 - **Keep going in a terminal**: the bottom of the chat shows the command to resume each agent's
   session.
+- **Doing something else meanwhile?** Press **🔔** in the chat's header: you get a sound and a
+  notification when the agents finish or need you, and the tab title shows how many replies came in.
+- **When an agent offers buttons** under its reply, a click answers that agent; you can still type
+  anything else instead.
 
 ## 4. Spend less
 
@@ -79,6 +87,8 @@ Which AI for which role:
 | API **Test**: *The environment variable GEMINI_API_KEY isn't set.* | Set it (see [Add an AI with an API key](../README.md#add-an-ai-with-an-api-key)) and **restart** agent-groupchat from a terminal that has it. |
 | API **Test**: *Can't reach …: HTTP Error 401* | The key is wrong or expired; check it with the provider. |
 | API **Test**: *Reached the API, but it has no model 'x'.* | Copy the exact model name from the provider's model list. |
+| In a Race/Split: *Not copied (too big): node_modules (over 500 MB)* | Copies get your git-ignored files up to 500 MB. Agents are told what's missing: allow them to install it in their copy (Edit + run commands), or use a normal message instead. |
+| 🔔 is on but no desktop notification appears | The browser blocked them for this page: allow notifications for `127.0.0.1` in its site settings. The sound and the `(1)` in the tab title still work. |
 | ⚡ Race / 🧩 Split are greyed out | They need a git repo (the page offers **Initialize git here**) and 2+ agents that can edit (Leads, or agents without a role). |
 | ⚠ *changed files although its permission is …* under a reply | An agent changed files it shouldn't have. Check ▸ Diff and undo with git if needed. |
 | An agent shows ⏳ *waiting for its turn to edit* | Normal: agents that edit take turns. |
