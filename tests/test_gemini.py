@@ -43,7 +43,7 @@ class GeminiAgent(ChatTest):
     def test_work_needs_docker_or_podman(self):
         with mock.patch.object(gem, "sandbox_runtime", return_value=None):
             c = self.chat(agents=[g(roles=["lead"])])
-            info = srv.level_info(c, "gemini")
+            info = srv.level_info(c, "gemini-cli")
             self.assertEqual(info["level"], "edit")
             self.assertIn("Docker or Podman", info["limited"])
             self.send(c, "hi")
@@ -58,7 +58,7 @@ class GeminiAgent(ChatTest):
         self.send(c, "@gemini one")
         first = self.argv()
         sid = first[first.index("--session-id") + 1]
-        self.assertEqual(c["sessions"]["gemini"], sid)
+        self.assertEqual(c["sessions"]["gemini-cli"], sid)
         self.assertIn("--skip-trust", first)
         self.assertTrue(first[-1].startswith("You are Gemini"), first[-1])
         self.send(c, "@gemini two")

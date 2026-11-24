@@ -1,7 +1,7 @@
 # agent-groupchat: Spec
 
 A local web app where **you and any number of AI agents** work together in one group chat, on one project folder.
-Bring whatever AIs you have (Claude Code, Codex, Gemini CLI, Aider, or any OpenAI-compatible chat API), run
+Bring whatever AIs you have (Claude Code, Codex, Antigravity, Gemini CLI, Aider, or any OpenAI-compatible chat API), run
 several copies of the same one, and give each a **role** (Planner, Lead, Tester, Reviewer…) with its own
 **permissions**.
 
@@ -51,7 +51,7 @@ agent_groupchat/
   diffs.py           # snapshots + per-reply diffs (carried over)
   adapters/
     base.py          # the Adapter interface
-    claude.py  codex.py  gemini.py  aider.py  openai_api.py
+    claude.py  codex.py  antigravity.py  gemini.py  aider.py  openai_api.py
   static/index.html
 tests/
   fake_agent.py      # a pretend AI CLI used by all tests
@@ -62,8 +62,13 @@ tests/
 ## 3. Agents (the AIs)
 
 ### 3.1 Two kinds
-- **Agent CLIs**: Claude Code, Codex, Gemini CLI, Aider (later more). They run in the chat's folder and can read, edit and run
-  commands. They keep every current feature: modes, diffs, live progress, resumable sessions.
+- **Agent CLIs**: Claude Code, Codex, Antigravity (`agy`, Google's Gemini), Gemini CLI, Aider. They run in the chat's
+  folder and can read, edit and (where the level allows) run commands. They keep every current feature: modes, diffs,
+  live progress, resumable sessions.
+  - **Naming:** the `agy` agent is called **Antigravity** and the `gemini` one **Gemini CLI**, never plain "Gemini":
+    that name is left for a Gemini *chat API* added with an API key, and an agent named "Gemini" would get the id
+    `gemini` and take `@gemini` away from the Gemini CLI agents. Google no longer serves the Gemini CLI to personal
+    accounts; its error points them to Antigravity.
 - **Chat APIs**: one adapter for any **OpenAI-compatible** endpoint (OpenAI, Ollama, OpenRouter, Groq, LM Studio…).
   Always **talk only**: no files, no tools.
 
@@ -83,7 +88,7 @@ Claude and Codex become the first two adapters and must behave **exactly as they
 
 ### 3.4 Where agents are configured
 - `~/.agent-groupchat/config.json`, **plus** a settings page that edits that same file.
-- **Presets**: installed CLIs (`claude`, `codex`, `gemini`, `aider`) are found automatically on first launch; no setup needed.
+- **Presets**: installed CLIs (`claude`, `codex`, `agy`, `gemini`, `aider`) are found automatically on first launch; no setup needed.
 - **API keys are never stored**: the config holds only the *name* of the environment variable that holds the key.
 
 ---
@@ -170,18 +175,20 @@ twice, each agent can get a **focus**: a short area like `login`, `database`, `b
 Every level maps to the agent's **real** permission flags. If an agent can't enforce a level, the settings page and
 New chat screen **grey that combination out and give the reason**. The app never silently gives an agent more power.
 
-| Level | Claude Code | Codex | Gemini CLI | Aider | Chat API |
-|---|---|---|---|---|---|
-| talk | ✅ `--tools ""` (no tools) | ⚠ read-only sandbox, told to only discuss¹ | ✅ policy denying every tool | ⚠ ask mode, told to only discuss¹ | ✅ (has no tools) |
-| read | ✅ read tools + `git diff/log/status`, tests in the sandbox | ✅ `read-only` sandbox | ✅ `--approval-mode default` | ✅ ask mode | ❌ |
-| edit | ✅ edit tools, no Bash | ❌ no "edit but no commands" setting | ✅ `--approval-mode auto_edit` | ✅ code mode, shell commands off, no auto-commits | ❌ |
-| edit + commands | ✅ sandboxed Bash (bubblewrap / macOS) | ✅ `workspace-write` (bubblewrap / macOS) | ✅ `yolo` inside `--sandbox` (needs Docker/Podman, or Seatbelt on macOS) | ❌ no sandbox | ❌ |
-| auto | ✅ auto mode | ✅ approve-for-me (needs the sandbox) | ❌ | ❌ | ❌ |
+| Level | Claude Code | Codex | Antigravity | Gemini CLI | Aider | Chat API |
+|---|---|---|---|---|---|---|
+| talk | ✅ `--tools ""` (no tools) | ⚠ read-only sandbox, told to only discuss¹ | ✅ Default mode + deny rules for read, write, command, MCP and URL tools | ✅ policy denying every tool | ⚠ ask mode, told to only discuss¹ | ✅ (has no tools) |
+| read | ✅ read tools + `git diff/log/status`, tests in the sandbox | ✅ `read-only` sandbox | ✅ deny write, command and MCP tools | ✅ `--approval-mode default` | ✅ ask mode | ❌ |
+| edit | ✅ edit tools, no Bash | ❌ no "edit but no commands" setting | ✅ deny command and MCP tools | ✅ `--approval-mode auto_edit` | ✅ code mode, shell commands off, no auto-commits | ❌ |
+| edit + commands | ✅ sandboxed Bash (bubblewrap / macOS) | ✅ `workspace-write` (bubblewrap / macOS) | ❌ commands need an approval a headless turn can't give² | ✅ `yolo` inside `--sandbox` (needs Docker/Podman, or Seatbelt on macOS) | ❌ no sandbox | ❌ |
+| auto | ✅ auto mode | ✅ approve-for-me (needs the sandbox) | ❌² | ❌ | ❌ | ❌ |
 
 ¹ The AI can still read files; it's told to only discuss, and the after-reply check (§5.4) flags any change.
+² Antigravity's rules come per run in `--settings` (never saved). A denied tool just fails and the agent carries on; a
+tool that would need approval ends a headless `agy` turn, so the app explains that error instead.
 A level an AI can't enforce is greyed out; a level that needs a missing sandbox drops to the next
 level down, and the agent's chip says *(limited)* with the reason. Verified against Claude Code 2.1,
-Codex CLI 0.171, Gemini CLI 0.70 (installed source) and Aider 0.86 (docs + source).
+Codex CLI 0.171, Antigravity CLI 1.5, Gemini CLI 0.70 (installed source) and Aider 0.86 (docs + source).
 
 ### 5.4 After-reply check
 After every reply, the app compares the folder before and after. If an agent changed files its level didn't allow

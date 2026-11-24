@@ -60,7 +60,7 @@ def describe_tool(name, args, folder):
 
 class GeminiAdapter(Adapter):
     id = "gemini"
-    name = "Gemini"
+    name = "Gemini CLI"
     kind = "Google's Gemini CLI"
     color = "#4285f4"
     skill_syntax = "none"  # headless Gemini doesn't load skill slash-commands
@@ -137,6 +137,9 @@ class GeminiAdapter(Adapter):
             msg = out["error"] or err or (f"exit code {code}" if code else "Gemini sent no reply")
             if code == 41:
                 msg = "Gemini CLI isn't logged in (run `gemini` once in a terminal). " + msg
+            elif "no longer supported" in msg:  # Google moved personal accounts to Antigravity
+                msg = ("Google no longer serves the Gemini CLI to personal accounts. Use the "
+                       "Antigravity agent instead (it runs Gemini). " + msg)
             return f"(error) {msg[-800:]}", meta
         if reply:
             ctx.step(first_line(reply))

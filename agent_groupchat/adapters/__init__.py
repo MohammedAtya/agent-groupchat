@@ -6,13 +6,14 @@ import os
 import re
 
 from .aider import AiderAdapter
+from .antigravity import AntigravityAdapter
 from .base import Adapter, MissingAdapter, RunContext
 from .claude import ClaudeAdapter
 from .codex import CodexAdapter
 from .gemini import GeminiAdapter
 from .openai_api import OpenAIChatAdapter
 
-BUILTIN = [ClaudeAdapter(), CodexAdapter(), GeminiAdapter(), AiderAdapter()]
+BUILTIN = [ClaudeAdapter(), CodexAdapter(), AntigravityAdapter(), GeminiAdapter(), AiderAdapter()]
 ADAPTERS = {a.id: a for a in BUILTIN}
 _loaded = {"file": None, "mtime": None}
 
@@ -33,7 +34,7 @@ def parse_apis(items):
         key_env = str(it.get("key_env") or "").strip()
         if not ID_RE.match(aid) or aid in seen:
             raise ValueError(f"API id {aid!r}: lowercase letters, digits and -, unique, "
-                             "and not claude/codex/gemini/aider.")
+                             "and not claude/codex/gemini/aider/antigravity.")
         if not name or len(name) > 30:
             raise ValueError(f"API {aid}: a name of 1-30 characters is needed.")
         if not URL_RE.match(url):

@@ -1236,7 +1236,7 @@ $('nTeam').onchange = () => {
   if (t) useTeam(t); else { $('nAgents').textContent = ''; defaultAgents(); $('nTeamName').value = ''; }
 };
 function defaultAgents() {
-  const ready = ['claude', 'codex', 'gemini'].filter(id => (adapters.find(a => a.id === id) || {}).installed);
+  const ready = ['claude', 'codex', 'antigravity', 'gemini'].filter(id => (adapters.find(a => a.id === id) || {}).installed);
   for (const id of ready.slice(0, 2)) agentRow({adapter: id});
   if (!$('nAgents').children.length) agentRow();
 }
