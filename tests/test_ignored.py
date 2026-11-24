@@ -98,8 +98,10 @@ class Links(unittest.TestCase):
         shutil.rmtree(self.root, ignore_errors=True)
 
     def link(self, target, *where):
-        try:
-            os.symlink(target, os.path.join(self.src, *where))
+        path = os.path.join(self.src, *where)
+        full = target if os.path.isabs(target) else os.path.join(os.path.dirname(path), target)
+        try:  # (Windows: a link to a folder must say so)
+            os.symlink(target, path, target_is_directory=os.path.isdir(full))
         except (OSError, NotImplementedError):
             self.skipTest("no symlinks here")
 
@@ -107,13 +109,15 @@ class Links(unittest.TestCase):
         os.makedirs(os.path.join(self.src, "links"))
         self.link(os.path.join(self.src, "conf", "real.cfg"), "local.cfg")
         self.link(os.path.join(self.src, "conf"), "links", "conf")
-        self.link("../conf/real.cfg", "links", "rel.cfg")
+        self.link(os.path.join("..", "conf", "real.cfg"), "links", "rel.cfg")
         out = copies.copy_ignored(self.src, self.dest)
         self.assertEqual((sorted(out["names"]), out["links"]), (["links", "local.cfg"], []))
-        self.assertEqual(os.readlink(os.path.join(self.dest, "local.cfg")),
-                         os.path.join(self.dest, "conf", "real.cfg"))
-        self.assertEqual(os.readlink(os.path.join(self.dest, "links", "conf")), os.path.join(self.dest, "conf"))
-        self.assertEqual(os.readlink(os.path.join(self.dest, "links", "rel.cfg")), "../conf/real.cfg")
+        same = lambda a, b: self.assertEqual(os.path.normcase(os.path.realpath(a)), os.path.normcase(os.path.realpath(b)))
+        same(os.path.join(self.dest, "local.cfg"), os.path.join(self.dest, "conf", "real.cfg"))
+        same(os.path.join(self.dest, "links", "conf"), os.path.join(self.dest, "conf"))
+        same(os.path.join(self.dest, "links", "rel.cfg"), os.path.join(self.dest, "conf", "real.cfg"))
+        self.assertEqual(os.readlink(os.path.join(self.dest, "links", "rel.cfg")),
+                         os.path.join("..", "conf", "real.cfg"))  # relative links stay as they are
 
     def test_links_that_lead_out_are_left_out_and_reported(self):
         self.link(self.outside, "out.txt")                         # absolute, outside the project
@@ -165,8 +169,8 @@ class Links(unittest.TestCase):
         self.link("y", "links", "z")
         out = copies.copy_ignored(self.src, self.dest)
         self.assertEqual(sorted(out["links"]), ["links/y", "links/z"])
-        self.assertEqual(os.path.realpath(os.path.join(self.dest, "links", "a")),
-                         os.path.join(self.dest, "conf", "real.cfg"))
+        self.assertEqual(os.path.normcase(os.path.realpath(os.path.join(self.dest, "links", "a"))),
+                         os.path.normcase(os.path.realpath(os.path.join(self.dest, "conf", "real.cfg"))))
 
     def test_a_partial_copy_is_removed_and_reported(self):
         os.makedirs(os.path.join(self.src, "links"))

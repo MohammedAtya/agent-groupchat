@@ -302,7 +302,7 @@ def _retarget(link, target):
     def change():
         if os.path.lexists(link):
             os.remove(link)
-        os.symlink(target, link)
+        os.symlink(target, link, target_is_directory=os.path.isdir(target))  # (Windows needs to know)
     _in_folder(os.path.dirname(link), change)
 
 
@@ -317,8 +317,19 @@ def _links_in(path):
     return found
 
 
+def _real(path):
+    """realpath, comparable: Windows may add a \\?\ prefix (readlink, realpath) and ignores case."""
+    p = os.path.realpath(path)
+    if p.startswith("\\\\?\\UNC\\"):
+        p = "\\\\" + p[8:]
+    elif p.startswith("\\\\?\\"):
+        p = p[4:]
+    return os.path.normcase(p)
+
+
 def _inside(path, folder):
-    return path == folder or path.startswith(folder + os.sep)
+    path, folder = _real(path), _real(folder)
+    return path == folder or path.startswith(folder.rstrip(os.sep) + os.sep)
 
 
 def _link_maps(src, dest):
@@ -346,11 +357,11 @@ def _contain_links(links, maps, copy_root):
         except OSError:
             continue
         if os.path.isabs(target):
-            real = os.path.realpath(target)
+            real = _real(target)
             for src, dest in maps:
                 if _inside(real, src):
                     try:
-                        _retarget(link, os.path.join(dest, os.path.relpath(real, src)))
+                        _retarget(link, os.path.join(dest, os.path.relpath(real, _real(src))))
                     except OSError:
                         pass  # step 2 deletes it if it still leads out
                     break
@@ -362,7 +373,7 @@ def _contain_links(links, maps, copy_root):
             if not os.path.lexists(link):
                 left.remove(link)
                 continue
-            if _inside(os.path.realpath(link), copy_root) and os.path.exists(link):
+            if _inside(link, copy_root) and os.path.exists(link):
                 continue
             left.remove(link)
             changed = True

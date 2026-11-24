@@ -197,7 +197,8 @@ class CodexRound1Fixes(RaceTest):
         with open(os.path.join(self.folder, "app.py"), "rb") as f:
             self.assertFalse(f.read().endswith(b"\n"))
         diff = srv.make_diff(before, ["app.py"], self.folder)
-        self.assertIn("-orig\n+changed\n\\ No newline at end of file\n", diff)
+        self.assertIn("-orig", diff)  # (\r\n on Windows: the test wrote it in text mode)
+        self.assertIn("\n+changed\n\\ No newline at end of file\n", diff)
 
 
 class StopKeepsAWaitingSplit(ChatTest):
