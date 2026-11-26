@@ -72,6 +72,16 @@ class ChoicesInChat(ChatTest):
         self.assertNotIn("reply_to", c["messages"][-1])
 
 
+    def test_a_reviewer_offers_choices_before_its_verdict(self):
+        meta = {}
+        text = srv.take_endings("Looks good.\nCHOICES: Ship it | Add the docstring first\nVERDICT: LGTM", meta)
+        self.assertEqual(text, "Looks good.\nVERDICT: LGTM")  # the verdict line stays (the badge comes from it)
+        self.assertEqual(meta, {"choices": ["Ship it", "Add the docstring first"]})
+        meta = {}
+        self.assertEqual(srv.take_endings("Fine.\nVERDICT: LGTM", meta), "Fine.\nVERDICT: LGTM")
+        self.assertEqual(meta, {})
+
+
 class ChoicesOverHttp(HttpBase):
     def test_send_with_reply_to_and_list_counts(self):
         import json

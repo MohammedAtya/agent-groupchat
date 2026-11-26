@@ -251,52 +251,201 @@
   #legacy button { padding:3px 10px; border-radius:7px; border:1px solid #9cc89c; background:#fff; cursor:pointer; }
   @media (prefers-color-scheme: dark) { #legacy { background:#1b2e1d; color:#cfe8cf; border-color:#2e4a31; }
                                         #legacy button { background:#20201e; color:inherit; } }
-  @media (max-width:700px) { aside { width:200px; } }
-  /* phones / narrow windows: the chat list goes on top, everything wraps */
-  @media (max-width:640px) {
-    body { flex-direction:column; }
-    aside { width:100%; max-height:28vh; border-right:0; border-bottom:1px solid var(--border); }
-    aside .top { display:flex; gap:6px; } aside .top > * { flex:1; margin-top:0 !important; }
-    main { flex:1; min-height:0; }
-    header { padding:8px 10px; gap:6px; }
-    header > div:first-child { flex:1 1 100% !important; }
-    header h1 { white-space:normal; }
-    header .folder { word-break:break-all; }
-    .chip { max-width:100%; overflow:hidden; text-overflow:ellipsis; }
-    .ctl select { max-width:120px; }
-    #log { padding:10px; } .msg { max-width:100%; }
-    form#f { padding:8px 10px; } form#f button { padding:0 12px; }
-    dialog form { overflow-x:auto; }
+  /* ================= workspace layout (v0.6): chats · chat · foldable panel ================= */
+  aside { width:250px; }
+  aside .top { display:flex; align-items:center; gap:8px; padding:12px 12px 8px; }
+  aside .top .brand { flex:1; font-size:15px; }
+  aside .top .primary { width:auto; padding:5px 12px; font-size:13px; }
+  .icon { background:transparent; border:1px solid var(--border); border-radius:8px; padding:4px 9px; cursor:pointer; }
+  .search { margin:0 12px 8px; padding:6px 10px; border-radius:8px; border:1px solid var(--border);
+            background:var(--bg); font-size:13px; }
+  .item.active { box-shadow:inset 3px 0 0 var(--user); }
+  header { flex-wrap:nowrap; padding:10px 18px; gap:12px; }
+  header .ttl { min-width:0; flex:0 1 auto; }
+  header h1 { flex:none; min-width:0; }
+  header .folder { overflow-wrap:normal; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  header .sp { flex:1; }
+  #panelBtn, #panelHide { white-space:nowrap; }
+  #listBtn { display:none; }
+  .faces { display:none; cursor:pointer; }
+  .faces .av { margin-left:-7px; border:2px solid var(--panel); }
+  .faces .av:first-child { margin-left:0; }
+  .live { display:none; font-size:12px; color:#d9824f; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:34vw; }
+  body.folded.has-chat .faces { display:flex; } body.folded.has-chat .live { display:inline; }
+  .av { width:26px; height:26px; border-radius:50%; display:inline-grid; place-items:center; flex-shrink:0;
+        font-size:11px; font-weight:700; color:#fff; position:relative; }
+  .av i { position:absolute; right:-2px; bottom:-2px; width:10px; height:10px; border-radius:50%; border:2px solid var(--panel); }
+  .st-working { background:#d9824f; } .st-done { background:#56d364; } .st-waiting, .st-idle, .st-stopped { background:#777; }
+  .st-failed { background:#d33; } #panel .agent .n .s.failed { color:#d33; }
+  /* right panel */
+  body { overflow:hidden; }
+  #panel { width:290px; flex-shrink:0; border-left:1px solid var(--border); background:var(--side);
+           overflow-y:auto; padding:14px; height:100vh; }
+  aside, main { height:100vh; }
+  body.folded #panel { display:none; }
+  #panel h3 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:16px 0 8px; }
+  #panel .phead { display:flex; justify-content:space-between; align-items:center; }
+  #panel .phead h3 { margin:0; }
+  #panel .agent { background:var(--panel); border:1px solid var(--border); border-left:3px solid var(--c, #888);
+                  border-radius:10px; padding:7px 10px; margin-top:6px; font-size:13px; cursor:pointer; }
+  #panel .agent:hover { background:var(--hover); }
+  #panel .agent .n { display:flex; align-items:center; gap:7px; font-weight:600; }
+  #panel .agent .n .s { margin-left:auto; font-size:11px; font-weight:500; color:var(--muted); white-space:nowrap; }
+  #panel .agent .n .s.working { color:#d9824f; }
+  #panel .agent .d { color:var(--muted); font-size:12px; margin-top:2px; overflow-wrap:anywhere; }
+  #panel .agent .d .up { color:var(--warn); } #panel .agent .d .lim { color:#c33; }
+  .set1 { display:flex; justify-content:space-between; align-items:center; gap:8px; font-size:13px; padding:5px 0; }
+  .set1 select { background:var(--bg); border:1px solid var(--border); border-radius:6px; padding:2px 6px; font-size:12px; }
+  .tog { width:36px; height:20px; border-radius:10px; border:0; background:var(--border); position:relative; cursor:pointer; padding:0; flex-shrink:0; }
+  .tog::after { content:""; position:absolute; width:16px; height:16px; border-radius:50%; background:#bbb; top:2px; left:2px; transition:left .15s; }
+  .tog.on { background:var(--user); } .tog.on::after { left:18px; background:#fff; }
+  #lockBtn.on { background:#c33; color:inherit; border:0; }
+  .pact { display:flex; flex-direction:column; gap:6px; }
+  .pact button { text-align:left; background:var(--panel); border:1px solid var(--border); border-radius:8px;
+                 padding:6px 10px; font-size:13px; cursor:pointer; }
+  .pact button:hover { background:var(--hover); }
+  .pact .danger { color:#d33; border-color:rgba(221,51,51,.35); }
+  #resume .rcmd { display:flex; gap:6px; align-items:center; font:11px/1.4 ui-monospace, monospace; color:var(--muted);
+                  background:var(--bg); border:1px solid var(--border); border-radius:7px; padding:4px 7px; margin-top:5px; }
+  #resume .rcmd span { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #resume button { border:0; background:transparent; cursor:pointer; color:var(--muted); padding:0 2px; }
+  /* messages, workspace style: name line + body with a coloured rule */
+  .msg.bot { background:transparent; border:0; padding:2px 0; max-width:100%; align-self:stretch; }
+  .msg.bot .who { display:flex; flex-wrap:wrap; gap:6px; align-items:center; font-size:13px; font-weight:700; }
+  .tag { font-size:11px; font-weight:600; color:var(--muted); border:1px solid var(--border); border-radius:6px; padding:0 6px; }
+  .msg.bot .verdict { margin:0; padding:0 7px; border-radius:10px; }
+  .msg.bot .verdict.ok { background:rgba(86,211,100,.15); } .msg.bot .verdict.fix { background:rgba(220,60,60,.15); }
+  .mbody { margin-top:3px; padding-left:12px; border-left:2px solid var(--c, #888); }
+  .msg.summary .mbody { border-left-style:dashed; }
+  .msg.user { max-width:78%; border-radius:12px 12px 3px 12px; }
+  .msg.user .who { display:none; }
+  .inner { max-width:780px; gap:14px; }
+  #log { padding:18px 20px; }
+  #typing .act, #typing .preview { max-width:780px; }
+  /* composer: mode tabs + a big message box */
+  form#f { flex-direction:column; gap:6px; padding:10px 20px 14px; background:var(--bg); }
+  form#f > * { width:100%; max-width:780px; margin:0 auto; }
+  .modes { display:flex; align-items:center; gap:4px; flex-wrap:wrap; }
+  .modes button { background:transparent !important; color:var(--muted) !important; border:1px solid transparent !important;
+                  border-radius:8px !important; padding:3px 11px !important; font-weight:500 !important; font-size:13px; white-space:nowrap; }
+  .modes button.on { background:var(--panel) !important; color:var(--text) !important; border-color:var(--border) !important; }
+  .modes button:disabled { opacity:.4; cursor:help; }
+  #to { margin-left:auto; padding:0 !important; font-size:12px; color:var(--muted); text-align:right; min-width:0;
+        flex:1 1 260px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .box { display:flex; gap:8px; align-items:flex-end; background:var(--panel); border:1px solid var(--border);
+         border-radius:12px; padding:8px; }
+  .box:focus-within { border-color:var(--user); }
+  #t { border:0; background:transparent; outline:0; padding:4px 6px; height:auto; min-height:52px; max-height:40vh; }
+  .box .fbtns { display:flex; gap:6px; }
+  form#f .box button { padding:8px 16px; }
+  #tray { max-width:780px; margin:0 auto 6px; }
+  #menu { left:max(16px, calc(50% - 390px)); right:auto; width:min(780px, calc(100% - 32px)); }
+  /* New chat (B + C): numbered sections, tap the AIs, agent cards */
+  dialog.newchat { width:min(920px, calc(100vw - 24px)); padding:0; }
+  #newForm { display:flex; flex-direction:column; max-height:min(760px, calc(100vh - 40px)); }
+  #dlg .ntop { display:flex; align-items:center; padding:14px 22px; border-bottom:1px solid var(--border); }
+  #dlg .ntop h2 { margin:0; flex:1; }
+  #dlg .ntop .x { border:0; background:transparent; font-size:18px; color:var(--muted); cursor:pointer; width:auto; }
+  #dlg .nbody { flex:1; overflow:auto; padding:4px 22px 14px; }
+  #dlg .sec { display:flex; gap:14px; padding:14px 0; border-bottom:1px solid var(--border); }
+  #dlg .sec:last-child { border:0; }
+  #dlg .num { width:26px; height:26px; border-radius:50%; background:var(--user); color:#fff; display:grid;
+              place-items:center; font-size:13px; font-weight:700; flex-shrink:0; }
+  #dlg .sc { flex:1; min-width:0; } #dlg .sc h3 { margin:2px 0 8px; font-size:15px; }
+  #dlg .sub { color:var(--muted); font-size:13px; margin:-6px 0 10px; }
+  #dlg .recent { display:flex; gap:6px; margin-top:7px; flex-wrap:wrap; }
+  #dlg .recent button { font:12px ui-monospace, monospace; border:1px solid var(--border); border-radius:14px; padding:1px 9px;
+                        background:transparent; color:var(--muted); cursor:pointer; }
+  #dlg .recent button.on { border-color:var(--user); color:var(--text); }
+  .tiles { display:grid; grid-template-columns:repeat(auto-fill, minmax(124px, 1fr)); gap:10px; }
+  .tile { border-radius:14px; background:var(--bg); border:2px solid var(--border); padding:12px 6px 10px; text-align:center;
+          font-size:13px; position:relative; cursor:pointer; user-select:none; color:inherit; font:inherit; width:100%; }
+  .tile:hover { border-color:var(--muted); }
+  .tile .av { width:40px; height:40px; font-size:16px; margin:0 auto 6px; display:grid; }
+  .tile.on { border-color:var(--user); background:rgba(47,111,222,.10); }
+  .tile .cnt { position:absolute; top:6px; right:8px; background:var(--user); color:#fff; border-radius:10px; font-size:11px;
+               padding:0 6px; font-weight:700; }
+  .twrap { position:relative; }
+  .twrap .tile { height:100%; }
+  .twrap .minus { position:absolute; top:5px; left:6px; width:20px; height:20px; border-radius:50%; border:0; background:var(--hover);
+                 color:var(--muted); font-size:13px; line-height:20px; padding:0; cursor:pointer; }
+  .twrap .minus:focus-visible { outline:2px solid var(--user); }
+  .tile.off { opacity:.5; } .tile small { display:block; color:var(--muted); font-size:11px; }
+  #nPresets { display:flex; gap:6px; margin:12px 0 8px; flex-wrap:wrap; align-items:center; }
+  #nPresets b { font-size:12px; color:var(--muted); font-weight:600; }
+  #nPresets button { font-size:13px; border-radius:14px; padding:3px 12px; border:1px solid var(--border); background:transparent; cursor:pointer; }
+  #nPresets button.on { background:var(--user); border-color:var(--user); color:#fff; }
+  .flowline { font-size:13px; background:var(--bg); border:1px solid var(--border); border-radius:10px; padding:7px 12px; }
+  #nAgents { display:grid; grid-template-columns:repeat(auto-fill, minmax(255px, 1fr)); gap:10px; margin-top:12px; }
+  .acard { border:1px solid var(--border); border-left:3px solid var(--c, #888); border-radius:12px; padding:9px 11px;
+           background:var(--bg); font-size:13px; min-width:0; }
+  .acard .n { display:flex; gap:8px; align-items:center; margin-bottom:7px; }
+  #dlg .acard .n input { flex:1; min-width:0; background:transparent; border:0; border-bottom:1px dashed var(--border);
+                         border-radius:0; padding:1px 0; font-weight:600; }
+  .acard .n .ai { font-size:11px; color:var(--muted); white-space:nowrap; }
+  .acard .n .rm { border:0; background:transparent; color:var(--muted); cursor:pointer; padding:0 2px; }
+  .acard td { display:block; padding:0; border:0; width:auto !important; }
+  #dlg .acard .roles label { display:inline-flex; margin:0 4px 4px 0; font-size:12px; color:var(--muted); cursor:pointer;
+                             border:1px solid var(--border); border-radius:12px; padding:0 9px; }
+  #dlg .acard .roles label:has(input:checked) { border-color:var(--user); color:var(--text); background:rgba(47,111,222,.15); }
+  #dlg .acard .roles label input { position:absolute; opacity:0; width:1px; height:1px; margin:0; pointer-events:none; }
+  #dlg .acard .roles label:has(input:focus-visible), .tile:focus-visible { outline:2px solid var(--user); outline-offset:2px; }
+  .acard details { margin-top:4px; }
+  .acard summary { cursor:pointer; font-size:12px; color:var(--muted); list-style:none; display:flex; justify-content:space-between; gap:8px; }
+  .acard summary::-webkit-details-marker { display:none; }
+  .acard summary b { color:#8ab4ff; font-weight:500; white-space:nowrap; }
+  .acard details label { margin:8px 0 3px; font-size:12px; }
+  #dlg .acard details input, #dlg .acard details select { padding:5px 8px; font-size:13px; }
+  .acard .note { font-size:11px; color:var(--muted); margin-top:3px; } .acard .note.up { color:var(--warn); } .acard .note.lim { color:#c33; }
+  #dlg .opts { display:flex; flex-wrap:wrap; gap:10px 20px; align-items:center; font-size:14px; }
+  #dlg .opts label { display:flex; gap:6px; align-items:center; margin:0; color:var(--text); font-size:14px; }
+  #dlg .opts select { width:auto; padding:3px 8px; } #dlg .opts input#nTitle { width:260px; padding:5px 9px; }
+  #dlg .opts input[type=checkbox] { width:auto; }
+  #dlg .nfoot { display:flex; flex-wrap:wrap; align-items:center; gap:8px 10px; padding:11px 22px; border-top:1px solid var(--border);
+                background:var(--side); border-radius:0 0 12px 12px; }
+  #dlg .nfoot #err:not(:empty) { order:-1; flex:1 1 100%; }
+  #dlg .nfoot .sum { flex:1; font-size:13px; color:var(--muted); min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #dlg .nfoot .sum b { color:var(--text); }
+  #dlg .nfoot button { padding:8px 16px; border-radius:9px; border:1px solid var(--border); background:var(--bg); cursor:pointer; }
+  #dlg .nfoot button.go { background:var(--user); border:0; color:#fff; font-weight:600; }
+  #dlg #err { margin:0; }
+  /* narrow windows: the chat fills the screen; ☰ shows the chats, the panel opens over the chat */
+  @media (max-width:900px) {
+    #panel { position:fixed; right:0; top:0; bottom:0; z-index:20; width:min(320px, 88vw); box-shadow:-12px 0 30px rgba(0,0,0,.45); }
+    .live { max-width:28vw; }
+  }
+  @media (max-width:700px) {
+    aside { display:none; position:fixed; left:0; top:0; bottom:0; z-index:21; width:min(300px, 86vw); box-shadow:12px 0 30px rgba(0,0,0,.45); }
+    body.list-open aside, body:not(.has-chat) aside { display:flex; }
+    body:not(.has-chat) aside { position:static; width:100%; box-shadow:none; }
+    #listBtn { display:inline-block; }
+    header { padding:8px 10px; gap:8px; } header .folder { display:none; }
+    body.folded.has-chat .live { display:none; }
+    #log { padding:12px 10px; } .msg.user { max-width:92%; }
+    form#f { padding:8px; } #to { text-align:left; flex-basis:100%; }
+
+    #menu { left:8px; width:calc(100% - 16px); }
+    #dlg .sec { gap:8px; } #dlg .num { display:none; } #dlg .opts input#nTitle { width:100%; }
+    #dlg .nfoot { padding:10px 12px; } #dlg .nfoot .sum { flex:1 1 100%; }
   }
 </style>
 </head>
 <body>
 <aside>
-  <div class="top"><button class="primary" id="newBtn">+ New chat</button>
-    <button class="small" id="setBtn" style="width:100%;margin-top:6px">⚙ Settings: agents, roles, teams</button></div>
+  <div class="top"><b class="brand">Chats</b>
+    <button class="icon" id="setBtn" title="Settings: agents, roles, teams">⚙</button>
+    <button class="primary" id="newBtn">+ New</button></div>
+  <input id="search" class="search" placeholder="🔎 Search chats" autocomplete="off" aria-label="Search chats">
   <div id="list"></div>
 </aside>
 <main>
   <header id="hdr" hidden>
-    <div style="flex:1;min-width:0">
-      <h1 id="title" title="Click to rename"></h1>
-      <div class="folder" id="folder"></div>
-      <div class="agents" id="agents"></div>
-    </div>
-    <button class="small" id="teamBtn" title="Roles and permissions of the agents in this chat">Team</button>
-    <button class="small" id="lockBtn" title="Talk-only lock: every agent may only talk (no files, no commands)">🔓 Lock</button>
-    <button class="small" id="notifyBtn">🔕</button>
-    <span class="ctl">Discussion
-      <select id="rounds"><option value="0">Off</option><option value="1">1 round</option>
-        <option value="2">2 rounds</option><option value="3">3 rounds</option></select>
-    </span>
-    <span class="ctl" id="fixCtl" title="If the Tester or Reviewer finds problems, the Lead fixes them automatically this many times before it comes back to you">Fix rounds
-      <select id="fixRounds"><option value="0">0</option><option value="1">1</option>
-        <option value="2">2</option><option value="3">3</option></select>
-    </span>
-    <button class="small" id="compact" title="Summarize this chat and continue in fresh sessions from the summary (cheaper replies)">Compact</button>
-    <button class="small" id="export" title="Download this chat as Markdown">Export</button>
-    <button class="small" id="del">Delete</button>
+    <button class="icon" id="listBtn" type="button" title="Chats">☰</button>
+    <div class="ttl"><h1 id="title" title="Click to rename"></h1><div class="folder" id="folder"></div></div>
+    <span class="sp"></span>
+    <div class="faces" id="faces" title="The team: click to show the panel"></div>
+    <span class="live" id="live"></span>
+    <button class="small" id="panelBtn" type="button"></button>
   </header>
   <div id="down" hidden style="background:#fde2e1;color:#8a1c17;padding:8px 16px;font-size:13px;border-bottom:1px solid #f3b8b5">
     ⚠ The chat server isn't running. Start it with <code>python3 -m agent_groupchat</code> in the project folder, and this page reconnects by itself.
@@ -309,7 +458,6 @@
   <div id="flowbar" hidden><span id="flowtext"></span><button id="goBtn" type="button">▶ Go ahead</button></div>
   <div id="composer">
   <div id="menu" hidden></div>
-  <div id="to" style="font-size:12px;color:var(--muted);padding:0 16px 4px"></div>
   <div id="tray" hidden>
     <div class="th"><b id="trayTitle"></b><button type="button" id="trayClose" title="Throw these comments away">✕</button></div>
     <div id="trayList"></div>
@@ -319,54 +467,83 @@
     <div id="traySend"></div>
   </div>
   <form id="f" hidden>
-    <textarea id="t" placeholder="Message the group… (@name to ask one agent, / for skills)"></textarea>
-    <button type="button" id="stopBtn" hidden title="Stop the running replies (and the rest of this turn)">■ Stop</button>
-    <button type="button" id="gitInit" hidden title="Make this folder a git repo (git init + a first commit; your files don't change). ⚡ Race needs it.">Initialize git here</button>
-    <button type="button" id="raceBtn" title="⚡ Race">⚡ Race</button>
-    <button type="button" id="splitBtn" title="🧩 Split">🧩 Split</button>
-    <button type="button" id="debateBtn" title="⚖ Debate">⚖ Debate</button>
-    <button type="submit">Send</button>
+    <div class="modes" id="modes">
+      <button type="button" data-mode="msg" class="on" title="A normal message">💬 Message</button>
+      <button type="button" data-mode="race" id="raceBtn" title="⚡ Race">⚡ Race</button>
+      <button type="button" data-mode="split" id="splitBtn" title="🧩 Split">🧩 Split</button>
+      <button type="button" data-mode="debate" id="debateBtn" title="⚖ Debate">⚖ Debate</button>
+      <div id="to"></div>
+    </div>
+    <div class="box">
+      <textarea id="t" placeholder="Message the group… (@name to ask one agent, / for skills)"></textarea>
+      <div class="fbtns">
+        <button type="button" id="stopBtn" hidden title="Stop the running replies (and the rest of this turn)">■ Stop</button>
+        <button type="button" id="gitInit" hidden title="Make this folder a git repo (git init + a first commit; your files don't change). ⚡ Race needs it.">Initialize git here</button>
+        <button type="submit" id="sendBtn">Send</button>
+      </div>
+    </div>
   </form>
   </div>
 </main>
+<section id="panel" hidden aria-label="Team, settings and actions">
+  <div class="phead"><h3>Team</h3><button class="small" id="panelHide" type="button" title="Hide the panel">⟩ Hide</button></div>
+  <div id="agents"></div>
+  <h3>This chat</h3>
+  <div class="set1"><span>🔔 Notifications</span><button type="button" class="tog" id="notifyBtn"></button></div>
+  <div class="set1"><span>🔒 Talk-only lock</span><button type="button" class="tog" id="lockBtn"
+       title="Talk-only lock: every agent may only talk (no files, no commands)"></button></div>
+  <div class="set1"><span>💬 Discussion</span>
+    <select id="rounds" title="After they all answer, agents reply to each other this many rounds"><option value="0">Off</option><option value="1">1 round</option>
+      <option value="2">2 rounds</option><option value="3">3 rounds</option></select></div>
+  <div class="set1" id="fixCtl" title="If the Tester or Reviewer finds problems, the Lead fixes them automatically this many times before it comes back to you"><span>🔁 Fix rounds</span>
+    <select id="fixRounds"><option value="0">0</option><option value="1">1</option>
+      <option value="2">2</option><option value="3">3</option></select></div>
+  <h3>Actions</h3>
+  <div class="pact">
+    <button type="button" id="teamBtn" title="Roles, focus and permissions of the agents in this chat">👥 Edit roles &amp; permissions</button>
+    <button type="button" id="renameBtn">✏️ Rename chat</button>
+    <button type="button" id="compact" title="Summarize this chat and continue in fresh sessions from the summary (cheaper replies)">🗜 Compact chat</button>
+    <button type="button" id="export" title="Download this chat as Markdown">⬇ Export as Markdown</button>
+    <button type="button" id="del" class="danger">🗑 Delete chat…</button>
+  </div>
+  <h3 id="resumeH" hidden>Continue in a terminal</h3><div id="resume"></div>
+</section>
 
-<dialog id="dlg" class="wide">
+<dialog id="dlg" class="newchat">
   <form method="dialog" id="newForm">
-    <h2>New group chat</h2>
-    <label for="nTeam">Start from a saved team</label>
-    <select id="nTeam"><option value="">None: set the agents up below</option></select>
-    <label for="nTitle">Name (optional)</label>
-    <input id="nTitle" placeholder="Named after your first message if empty">
-    <label for="nFolder">Project folder</label>
-    <input id="nFolder">
-    <div class="hint">The agents work here and load this folder's CLAUDE.md / AGENTS.md and project skills.</div>
-    <label>Agents</label>
-    <table class="agents-table"><thead><tr><th>AI</th><th>Name</th><th>Model</th><th>Roles · focus</th><th>Permission</th><th></th></tr></thead>
-      <tbody id="nAgents"></tbody></table>
-    <div class="overlaps" id="nOverlap"></div>
-    <button type="button" id="addAgent">+ Add agent</button>
-    <div class="warn-msg" id="nMany" hidden>More than 5 agents: every message costs more and turns get slower.</div>
-    <div class="hint">Add several copies of the same AI if you like: each one is its own session. An empty name
-      becomes "Claude", or "Claude 1", "Claude 2"… for copies. An empty model uses the CLI's default.
-      No role = Participant. Roles act in order: Planner + Critic → your OK → Lead → Tester → Reviewer.
-      Several agents can share a role: give each a <b>focus</b> (e.g. Tester 1 "login", Tester 2 "database")
-      so they split the work instead of doing it twice.
-      Greyed-out permissions can't be enforced for that AI; ⚠ = raised above the role's default.</div>
-    <label class="check"><input type="checkbox" id="nLock"> Start with the 🔒 Talk-only lock (nobody touches files)</label>
-    <label for="nRounds">Let the agents reply to each other</label>
-    <select id="nRounds"><option value="0">Off</option><option value="1" selected>1 round</option>
-      <option value="2">2 rounds</option><option value="3">3 rounds</option></select>
-    <label for="nFix">Automatic fix rounds (when the Tester or Reviewer finds problems)</label>
-    <select id="nFix"><option value="0">0</option><option value="1" selected>1</option>
-      <option value="2">2</option><option value="3">3</option></select>
-    <div class="inline"><input id="nTeamName" placeholder="Team name, e.g. Claude builds, Codex reviews" maxlength="40">
-      <button type="button" id="nSaveTeam">💾 Save as team</button></div>
-    <div id="nTeamMsg"></div>
-    <div id="err"></div>
-    <div class="row">
-      <button value="cancel" formnovalidate>Cancel</button>
-      <button class="go" id="create" value="default">Create</button>
+    <div class="ntop"><h2>New chat</h2><button class="x" value="cancel" formnovalidate title="Close">✕</button></div>
+    <div class="nbody">
+      <div class="sec"><span class="num">1</span><div class="sc"><h3>Project folder</h3>
+        <input id="nFolder" aria-label="Project folder">
+        <div class="recent" id="nRecent"></div>
+        <div class="hint">The agents work here and load this folder's CLAUDE.md / AGENTS.md and project skills.</div></div></div>
+      <div class="sec"><span class="num">2</span><div class="sc"><h3>Who's in this chat?</h3>
+        <div class="sub">Tap an AI to add it, tap again for another copy (each copy is its own session).</div>
+        <div class="tiles" id="nTiles"></div>
+        <div id="nPresets"></div>
+        <div class="flowline" id="nFlow"></div>
+        <div id="nAgents"></div>
+        <div class="overlaps" id="nOverlap"></div>
+        <div class="warn-msg" id="nMany" hidden>More than 5 agents: every message costs more and turns get slower.</div>
+        <div class="hint">No role = Participant (answers you directly). Roles act in order: Planner + Critic → your OK → Lead → Tester → Reviewer.
+          Several agents can share a role: give each a <b>focus</b> under More (e.g. Tester 1 "login", Tester 2 "database").
+          Greyed-out permissions can't be enforced for that AI; ⚠ = raised above the role's default.</div></div></div>
+      <div class="sec"><span class="num">3</span><div class="sc"><h3>Options</h3>
+        <div class="opts">
+          <label>Name <input id="nTitle" placeholder="Named after your first message if empty"></label>
+          <label>💬 Discussion <select id="nRounds"><option value="0">Off</option><option value="1" selected>1 round</option>
+            <option value="2">2 rounds</option><option value="3">3 rounds</option></select></label>
+          <label title="Automatic fix rounds when the Tester or Reviewer finds problems">🔁 Fix rounds <select id="nFix"><option value="0">0</option><option value="1" selected>1</option>
+            <option value="2">2</option><option value="3">3</option></select></label>
+          <label><input type="checkbox" id="nLock"> 🔒 Talk-only lock</label>
+        </div>
+        <div class="inline"><input id="nTeamName" placeholder="Save this setup as a team, e.g. Claude builds, Codex reviews" maxlength="40">
+          <button type="button" id="nSaveTeam">💾 Save as team</button></div>
+        <div id="nTeamMsg"></div></div></div>
     </div>
+    <div class="nfoot"><span class="sum" id="nSum"></span><span id="err"></span>
+      <button value="cancel" formnovalidate>Cancel</button>
+      <button class="go" id="create" value="default">Create chat</button></div>
   </form>
 </dialog>
 
@@ -476,24 +653,58 @@ function listNames(ids) {
 }
 const roleText = a => ((a.roles || []).map(r => roleNames[r] || r).join(' + ') || 'Participant') +
   (a.focus ? ` (${a.focus})` : '');
-function showAgents() {  // one chip per agent: name · role(s) · permission (⚠ raised / limited)
-  const box = $('agents'); box.textContent = '';
+function initials(name) {  // "Claude 2" -> C2, "Builder Prime" -> BP, "Codex" -> C
+  const words = String(name || '?').trim().split(/\s+/).filter(Boolean), num = /(\d+)$/.exec(words[words.length - 1] || '');
+  const first = (words[0] || '?')[0].toUpperCase();
+  if (num && words.length > 1) return first + num[1];
+  return (words.length > 1 ? first + (words[1][0] || '').toUpperCase() : first);
+}
+function avatar(id, status) {  // a coloured circle with initials (C1, C2, C) and an optional status dot
+  const a = agentOf(id), sp = document.createElement('span'); sp.className = 'av';
+  sp.style.background = colorOf(id); sp.textContent = initials(a.name || id);
+  if (status) { const i = document.createElement('i'); i.className = 'st-' + status; sp.append(i); }
+  return sp;
+}
+function agentStatus(c, id) {  // working / waiting (queued for your latest message) / done / idle
+  if ((c.activity || {})[id]) return 'working';
+  const lastUser = [...c.messages].reverse().find(m => m.who === 'user');
+  const st = lastUser && (lastUser.status || {})[id];
+  if (['queued', 'waiting', 'running'].includes(st)) return 'waiting';
+  if (st === 'stopped') return 'stopped';
+  if (['error', 'timed out'].includes(st)) return 'failed';
+  return st ? 'done' : 'idle';
+}
+const STATUS_TEXT = {working: '● working', waiting: '… waiting', done: '✓ done', stopped: '■ stopped', failed: '✗ failed', idle: ''};
+function showAgents() {  // the panel's Team cards + the faces shown in the header when the panel is folded
+  const box = $('agents'), faces = $('faces'), c = chat || {};
+  box.textContent = ''; faces.textContent = '';
   for (const a of agentList) {
-    const p = perm[a.id] || {}, chip = document.createElement('span');
-    chip.className = 'chip'; chip.style.setProperty('--c', colorOf(a.id));
-    const b = document.createElement('b'); b.textContent = a.name;
-    const lv = document.createElement('span'); lv.className = 'lv';
-    lv.textContent = ` · ${roleText(a)} · ${levelNames[p.level] || p.level || ''}`;
-    chip.append(b, lv);
-    if (p.raised && !p.locked) { const u = document.createElement('span'); u.className = 'up'; u.textContent = ' ⚠'; chip.append(u); }
-    if (p.limited && !p.locked) { const l = document.createElement('span'); l.className = 'lim'; l.textContent = ' (limited)'; chip.append(l); }
-    chip.title = `@${a.id}` + (a.model ? ` · model ${a.model}` : '') +
+    const p = perm[a.id] || {}, st = agentStatus(c, a.id), card = document.createElement('div');
+    card.className = 'agent'; card.style.setProperty('--c', colorOf(a.id));
+    const n = document.createElement('div'); n.className = 'n';
+    const nm = document.createElement('span'); nm.textContent = a.name;
+    const s1 = document.createElement('span'); s1.className = 's ' + st; s1.textContent = STATUS_TEXT[st];
+    n.append(avatar(a.id), nm, s1);
+    const d = document.createElement('div'); d.className = 'd';
+    d.append(`${roleText(a)} · ${levelNames[p.level] || p.level || ''}`);
+    if (p.raised && !p.locked) { const u = document.createElement('span'); u.className = 'up'; u.textContent = ' ⚠ raised'; d.append(u); }
+    if (p.limited && !p.locked) { const l = document.createElement('span'); l.className = 'lim'; l.textContent = ' (limited)'; d.append(l); }
+    const act = (c.activity || {})[a.id];
+    if (act) { const steps = act.steps || []; d.append(' · ' + (steps.length ? steps[steps.length - 1] : 'thinking…')); }
+    card.append(n, d);
+    card.title = `@${a.id}` + (a.model ? ` · model ${a.model}` : '') +
       (p.raised ? `\n⚠ raised above its role's default (${levelNames[p.default]})` : '') +
       (p.limited ? `\nWould have ${levelNames[p.requested]}, but it ${p.limited}.` : '') +
       (p.locked ? '\n🔒 Talk-only lock is on' : '') + '\nClick to change roles and permissions';
-    chip.onclick = openTeam;
-    box.append(chip);
+    card.onclick = openTeam;
+    box.append(card);
+    const f = avatar(a.id, st); f.title = `${a.name} · ${roleText(a)}${STATUS_TEXT[st] ? ' · ' + STATUS_TEXT[st] : ''}`;
+    faces.append(f);
   }
+  const working = Object.entries(c.activity || {});
+  $('live').textContent = working.length ? working.map(([b, x]) => {
+    const steps = x.steps || []; return `${names[b] || b}: ${steps.length ? steps[steps.length - 1] : 'thinking…'}`;
+  }).join(' · ') : '';
 }
 function showFlow() {
   const f = chat && chat.flow, wait = !!(f && f.waiting);
@@ -517,6 +728,7 @@ function ago(ts) {
 }
 
 let listSeq = 0, listShown = 0;  // like refresh(): a late, older answer is ignored
+let recentFolders = [];
 async function loadList() {
   const mine = ++listSeq;
   let d;
@@ -548,7 +760,10 @@ async function loadList() {
   }
   for (const id of Object.keys(seen)) if (!d.chats.some(c => c.id === id)) delete seen[id];
   saveSeen(seen);
+  recentFolders = [...new Set(d.chats.map(c => c.folder))].slice(0, 6);
+  const q = ($('search').value || '').trim().toLowerCase();
   for (const c of d.chats) {
+    if (q && !(c.title + ' ' + c.folder).toLowerCase().includes(q)) continue;
     const el = document.createElement('div');
     const fresh = c.id !== current && c.count > seen[c.id];
     el.className = 'item' + (c.id === current ? ' active' : '') + (fresh ? ' unread' : '');
@@ -558,7 +773,7 @@ async function loadList() {
     s.innerHTML = `<span class="badge ${c.lock ? '' : 'work'}">${c.lock ? '🔒 locked' : c.agents + ' agents'}</span> `;
     s.append(ago(c.updated) + ' · ' + c.folder.replace(home, '~'));
     el.append(t, s);
-    el.onclick = () => openChat(c.id);
+    el.onclick = () => { document.body.classList.remove('list-open'); openChat(c.id); };
     list.append(el);
   }
   return d.chats;
@@ -571,7 +786,9 @@ async function openChat(id) {
   raceOpen = new Set(); raceDiffs = {}; raceSel = new Set();  // per chat: never show another chat's copy
   for (const k in diffCache) delete diffCache[k];
   try { localStorage.setItem('gc-last', id); } catch (e) {}
-  $('hdr').hidden = false; $('f').hidden = false;
+  $('hdr').hidden = false; $('f').hidden = false; $('panel').hidden = false;
+  document.body.classList.add('has-chat'); document.body.classList.remove('list-open');
+  resumeSig = ''; setMode('msg');
   skills = []; skillsFor = null; loadSkills();
   await refresh(); loadList(); $('t').focus();
 }
@@ -593,14 +810,14 @@ async function refresh() {
   const seenNow = loadSeen(), shown = c.messages.filter(m => !m.hidden).length;
   if (!(seenNow[c.id] >= shown)) { seenNow[c.id] = shown; saveSeen(seenNow); }  // you saw these
   $('title').textContent = c.title;
-  $('folder').textContent = c.folder;
   chat = c; agentList = c.agents || []; colors = c.colors || {}; aliasMap = c.aliases || {};
   perm = c.perm || {};
   names = {user:'You'}; agentList.forEach(a => { names[a.id] = a.name; });
   showAgents(); showFlow();
   $('rounds').value = String(c.rounds); $('fixRounds').value = String(c.fix_rounds ?? 1);
   $('fixCtl').hidden = !agentList.some(a => (a.roles || []).includes('lead'));
-  $('lockBtn').textContent = c.lock ? '🔒 Locked' : '🔓 Lock'; $('lockBtn').classList.toggle('on', !!c.lock);
+  $('lockBtn').classList.toggle('on', !!c.lock); $('lockBtn').setAttribute('aria-pressed', String(!!c.lock));
+  $('folder').textContent = c.folder.replace(home, '~'); $('folder').title = c.folder;
   const rb = $('raceBtn'), canInit = !!(c.git && c.git.can_init);
   rb.disabled = !!c.race_block;
   rb.title = c.race_block ? `⚡ Race isn't possible here: ${c.race_block}.` :
@@ -619,6 +836,9 @@ async function refresh() {
   sb.title = c.split_block ? `🧩 Split isn't possible here: ${c.split_block}.` :
     '🧩 Split: divide this task into parts that agents build at the same time, each in its own copy. ' +
     'The parts are merged, then tested and reviewed. About the cost of one agent doing it all, but faster.';
+  if (mode !== 'msg' && MODE_BTN[mode] && $(MODE_BTN[mode]).disabled) setMode('msg');  // not possible anymore
+  else if (mode !== 'msg') updateTo();
+  showResume(c);
   const sig = c.messages.length + '|' + JSON.stringify(c.sessions) + '|' + JSON.stringify(c.flow) + '|' +
     JSON.stringify(c.race) + '|' + c.busy + '|' +
     JSON.stringify(c.messages.map(m => [m.status, m.retried]));
@@ -643,37 +863,60 @@ async function refresh() {
       d.className = 'msg ' + (m.who === 'user' ? 'user' : 'bot') + (summary ? ' summary' : '') + (failed ? ' failed' : '') + (m.retried ? ' retried' : '');
       if (m.who !== 'user') d.style.setProperty('--c', colorOf(m.who));
       const w = document.createElement('div'); w.className = 'who';
-      w.textContent = summary ? `📋 Chat summary (by ${names[m.who] || m.who}): fresh sessions continue from here`
-        : (names[m.who] || m.who) + (m.mode === 'race' ? ' · ⚡ Race' : m.mode === 'split' ? ' · 🧩 Split' : '') + (meta.role ? ' · ' + meta.role : '') + (m.retried ? ' · retried' : '');
+      const tag = t => { const x = document.createElement('span'); x.className = 'tag'; x.textContent = t; w.append(x); };
+      if (summary) w.textContent = `📋 Chat summary (by ${names[m.who] || m.who}): fresh sessions continue from here`;
+      else {
+        w.append(names[m.who] || m.who);
+        if (m.mode === 'race') tag('⚡ Race'); else if (m.mode === 'split') tag('🧩 Split'); else if (m.mode === 'debate') tag('⚖ Debate');
+        if (meta.role) tag(meta.role);
+        if (m.retried) tag('retried');
+      }
       if (meta.verdict) {
         const v = document.createElement('span'); v.className = 'verdict ' + (meta.verdict === 'LGTM' ? 'ok' : 'fix');
         v.textContent = meta.verdict === 'LGTM' ? '✓ LGTM' : '✗ needs fixes'; w.append(v);
       }
       const b = document.createElement('div');
       if (m.who === 'user') b.textContent = m.text;          // your messages stay plain text
-      else { b.className = 'md'; b.innerHTML = md(m.text); } // AI replies: Markdown
-      d.append(w, b);
-      if (m.who !== 'user' && meta.loose_ends) d.append(looseEnds(meta.loose_ends));
-      if (m.who !== 'user' && meta.choices && idx > lastUser) d.append(choiceButtons(m));
+      else {  // AI replies: Markdown (the VERDICT: line shows as the badge above instead)
+        const text = meta.verdict ? m.text.replace(/(^|\n)[^\n]*VERDICT:\s*\**\s*(LGTM|FIX)\b[^\n]*\s*$/i, '') : m.text;
+        b.className = 'md'; b.innerHTML = md(text);
+      }
+      const body = m.who === 'user' ? d : document.createElement('div');
+      if (m.who !== 'user') { body.className = 'mbody'; d.append(w, body); } else d.append(w);
+      body.append(b);
+      if (m.who !== 'user' && meta.loose_ends) body.append(looseEnds(meta.loose_ends));
+      if (m.who !== 'user' && meta.choices && idx > lastUser) body.append(choiceButtons(m));
       if (m.who === 'user' && m.status) d.append(statusLine(m.status));
       const info = metaLine(meta);
-      if (info) { const x = document.createElement('div'); x.className = 'meta'; x.textContent = info; d.append(x); }
-      if (m.who !== 'user') d.append(actions(m, idx, failed));
-      if (openDiffs.has(idx)) showDiff(d, idx, m);
+      if (info) { const x = document.createElement('div'); x.className = 'meta'; x.textContent = info; body.append(x); }
+      if (m.who !== 'user') body.append(actions(m, idx, failed));
+      if (openDiffs.has(idx)) showDiff(body, idx, m);
       inner.append(d);
     });
     if (c.race) inner.append(racePanel(c));
-    const hints = Object.entries(c.resume || {});
-    if (hints.length) {
-      const r = document.createElement('div'); r.className = 'resume';
-      r.textContent = 'Continue in a terminal (cd ' + c.folder.replace(home, '~') + '):  ' +
-        hints.map(([b, h]) => (agentList.length > 2 ? names[b] + ': ' : '') + h).join('   ·   ');
-      inner.append(r);
-    }
     if (stick || !lastScrolled) log.scrollTop = log.scrollHeight;  // don't yank you away from older messages
     lastScrolled = true;
   }
   showActivity(c.activity || {});
+}
+let resumeSig = '';
+function showResume(c) {  // the panel's "Continue in a terminal": one line per agent, with a copy button
+  const hints = Object.entries(c.resume || {}), sig = c.id + JSON.stringify(hints);
+  if (sig === resumeSig) return;
+  resumeSig = sig;
+  const box = $('resume'); box.textContent = ''; $('resumeH').hidden = !hints.length;
+  if (!hints.length) return;
+  const line = (label, cmd) => {
+    const r = document.createElement('div'); r.className = 'rcmd';
+    const t = document.createElement('span'); t.textContent = cmd; t.title = (label ? label + ': ' : '') + cmd;
+    const b = document.createElement('button'); b.type = 'button'; b.textContent = '⧉'; b.title = 'Copy';
+    b.onclick = () => { try { navigator.clipboard.writeText(cmd); b.textContent = '✓'; setTimeout(() => { b.textContent = '⧉'; }, 1200); } catch (e) {} };
+    r.append(t, b); box.append(r);
+  };
+  const q = c.folder;  // quoted when needed: works in bash, zsh, cmd and PowerShell
+  // only plain path characters stay unquoted; anything else ([ ] spaces & $ …) is quoted
+  line('', 'cd ' + (/^[\w@%+=:,.\/~-]+$/.test(q) ? q : /["$`!]|\\$/.test(q) ? "'" + q.replace(/'/g, "'\\''") + "'" : '"' + q + '"'));
+  for (const [b, h] of hints) line(names[b] || b, h);
 }
 
 // ---- Markdown for AI replies. Everything is HTML-escaped first; only the markup below
@@ -803,7 +1046,7 @@ function actions(m, idx, failed) {
     if (cls) bt.className = cls; bt.onclick = fn; x.append(bt);
   };
   btn('↩ Reply', `Write to ${names[m.who] || m.who} only`, () => {
-    const t = $('t'); t.value = `@${m.who} ` + t.value.replace(/^@[\w-]+\s*/, ''); t.focus(); updateTo(); });
+    const t = $('t'); t.value = `@${m.who} ` + t.value.replace(/^@[\w-]+\s*/, ''); setMode('msg'); t.focus(); });
   const meta0 = m.meta || {};  // Race/Split replies other than a racer's or a part's can't be retried
   const noRetry = meta0.race || meta0.stage === 'debate' || (meta0.copy && !['race', 'part'].includes(meta0.stage));
   if (failed && !m.retried && !noRetry)
@@ -959,6 +1202,7 @@ function metaLine(m) {
   return parts.join(' · ');
 }
 function showActivity(act) {
+  showAgents();  // (status on the panel's cards, faces and the "is editing…" line in the header)
   const box = $('typing'), bots = Object.keys(act), st = $('stopBtn');
   // one permanent Stop button next to Send (keeps keyboard focus; the activity rows are redrawn every second)
   st.hidden = !bots.length; st.disabled = stopping; st.textContent = stopping ? 'Stopping…' : '■ Stop';
@@ -985,19 +1229,34 @@ function showActivity(act) {
   });
 }
 
-$('raceBtn').onclick = async () => {
+// ---- composer modes: 💬 Message · ⚡ Race · 🧩 Split · ⚖ Debate (the tab decides what Send does)
+let mode = 'msg';
+const MODE_BTN = {race: 'raceBtn', split: 'splitBtn', debate: 'debateBtn'};
+const MODE_SEND = {msg: 'Send', race: '⚡ Race', split: '🧩 Split…', debate: '⚖ Debate'};
+const MODE_HINT = {msg: 'Message the group… (@name to ask one agent, / for skills)',
+  race: 'The task every agent does in its own copy…', split: 'The task to split into parts…',
+  debate: 'The question to debate…'};
+function setMode(m) {
+  mode = m;
+  for (const b of $('modes').querySelectorAll('button')) b.classList.toggle('on', b.dataset.mode === m);
+  $('sendBtn').textContent = MODE_SEND[m]; $('t').placeholder = MODE_HINT[m];
+  updateTo();
+}
+for (const b of $('modes').querySelectorAll('button'))
+  b.onclick = () => { setMode(mode === b.dataset.mode ? 'msg' : b.dataset.mode); $('t').focus(); };
+async function startRace() {
   const text = $('t').value.trim();
   if (!text || !current) { $('t').focus(); return; }
   const r = await api(`/api/chats/${current}/send`, {text, mode: 'race'});
   if (r.error) { alert(r.error); return; }
-  $('t').value = ''; updateTo(); raceOpen = new Set(); raceDiffs = {}; raceSel = new Set(); lastSig = '';
+  $('t').value = ''; setMode('msg'); raceOpen = new Set(); raceDiffs = {}; raceSel = new Set(); lastSig = '';
   refresh(); loadList();
-};
+}
 function splitMode() { return $('splitByOwn').checked ? 'own' : 'planner'; }
 function showSplitParts() {
   const box = $('splitParts'); box.hidden = splitMode() !== 'own';
 }
-$('splitBtn').onclick = () => {
+function openSplit() {
   if (!chat) return;
   $('splitTask').value = $('t').value.trim(); $('splitErr').textContent = '';
   const canPlan = !!chat.split_planner;
@@ -1013,7 +1272,7 @@ $('splitBtn').onclick = () => {
     d.append(b, ta); box.append(d);
   }
   showSplitParts(); $('splitDlg').showModal();
-};
+}
 $('splitByPlanner').onchange = showSplitParts; $('splitByOwn').onchange = showSplitParts;
 $('splitStart').onclick = async e => {
   e.preventDefault();
@@ -1026,7 +1285,7 @@ $('splitStart').onclick = async e => {
   }
   const r = await api(`/api/chats/${current}/send`, body);
   if (r.error) { $('splitErr').textContent = r.error; return; }
-  $('splitDlg').close(); $('t').value = ''; updateTo();
+  $('splitDlg').close(); $('t').value = ''; setMode('msg');
   raceOpen = new Set(); raceDiffs = {}; raceSel = new Set(); lastSig = ''; refresh(); loadList();
 };
 $('gitInit').onclick = async () => {
@@ -1042,6 +1301,9 @@ $('stopBtn').onclick = () => {
 };
 $('f').onsubmit = async e => {
   e.preventDefault();
+  if (mode === 'race') return startRace();
+  if (mode === 'split') return openSplit();
+  if (mode === 'debate') return startDebate();
   const text = $('t').value.trim(); if (!text || !current) return;
   $('t').value = ''; updateTo();
   await api(`/api/chats/${current}/send`, {text});
@@ -1084,6 +1346,9 @@ function flowText(nm) {  // "Claude 1 plans → ⏸ your OK → Claude 2 works �
   return parts.join(' → ');
 }
 function updateTo() {
+  if (mode !== 'msg' && MODE_BTN[mode]) {  // what the chosen mode does (the tab's tooltip)
+    $('to').textContent = $(MODE_BTN[mode]).title; return;
+  }
   const text = $('t').value, m = mentioned(text), sk = skillOf(text), ids = agentList.map(a => a.id);
   const has = b => sk.adapters.includes(agentOf(b).adapter);
   const flowIds = new Set(Object.keys(STAGE_ROLES).flatMap(inStage));
@@ -1300,6 +1565,7 @@ $('compact').onclick = async () => {
 };
 $('export').onclick = () => { if (current) location.href = `/api/chats/${current}/export`; };
 $('rounds').onchange = () => api(`/api/chats/${current}/settings`, {rounds: +$('rounds').value});
+$('renameBtn').onclick = () => $('title').onclick();
 $('title').onclick = async () => {
   const t = prompt('Rename chat', $('title').textContent);
   if (t && t.trim()) { await api(`/api/chats/${current}/settings`, {title: t}); refresh(); loadList(); }
@@ -1307,76 +1573,202 @@ $('title').onclick = async () => {
 $('del').onclick = async () => {
   if (!confirm("Delete this chat from the list? (The agents' own sessions stay in their history.)")) return;
   await api(`/api/chats/${current}/delete`, {});
-  current = null; $('hdr').hidden = true; $('f').hidden = true;
+  current = null; $('hdr').hidden = true; $('f').hidden = true; $('panel').hidden = true;
+  document.body.classList.remove('has-chat');
   $('inner').innerHTML = '<div class="empty">Chat deleted.</div>';
   loadList();
 };
 
-// ---- New chat
-function agentRow(spec = {}) {
-  const tr = document.createElement('tr'); tr.className = 'agentRow';
-  const sel = document.createElement('select'); sel.className = 'ai';
-  for (const a of adapters) {
-    const o = document.createElement('option'); o.value = a.id;
-    o.textContent = a.name + (a.api ? ' (API)' : a.installed ? '' : ' (not installed)'); sel.append(o);
-  }
-  sel.value = spec.adapter || (adapters.find(a => a.installed) || adapters[0] || {}).id;
-  const nm = document.createElement('input'); nm.placeholder = 'optional'; nm.maxLength = 40; nm.value = spec.name || '';
-  const md = document.createElement('input'); md.maxLength = 80; md.value = spec.model || '';
-  const cells = rolePermCells(choicesFor(sel.value), spec.roles, spec.level, '', spec.focus);
-  const hintModel = () => { const a = adapters.find(x => x.id === sel.value) || {};
-    md.placeholder = a.needs_model ? 'required' : 'default'; };
-  sel.onchange = () => { hintModel(); cells.setChoices(choicesFor(sel.value)); };
-  hintModel();
-  const rm = document.createElement('button'); rm.type = 'button'; rm.className = 'x'; rm.textContent = '✕';
-  rm.title = 'Remove this agent';
-  rm.onclick = () => { if ($('nAgents').children.length > 1) { tr.remove(); countAgents(); checkNew(); } };
-  const td = el => { const c = document.createElement('td'); c.append(el); return c; };
-  tr.append(td(sel), td(nm), td(md), cells.rc, cells.pc, td(rm));
-  tr._get = () => ({adapter: sel.value, name: nm.value.trim(), model: md.value.trim(),
-                    roles: cells.roles(), level: cells.level(), focus: cells.focus()});
-  $('nAgents').append(tr); countAgents();
+// ---- New chat (SPEC §7.1): 1 folder · 2 tap the AIs, presets, agent cards · 3 options
+const READY_ORDER = ['claude', 'codex', 'antigravity', 'gemini', 'aider'];
+const readyAIs = () => READY_ORDER.filter(id => (adapters.find(a => a.id === id) || {}).installed);
+function autoNames(specs) {  // the names the server will give (Claude, or Claude 1 / Claude 2 for copies)
+  const count = {}, nth = {}, taken = new Set();
+  specs.forEach(sp => { count[sp.adapter] = (count[sp.adapter] || 0) + 1; });
+  return specs.map(sp => {
+    nth[sp.adapter] = (nth[sp.adapter] || 0) + 1;
+    const base = adapterNames[sp.adapter] || sp.adapter;
+    let name = sp.name || (count[sp.adapter] === 1 ? base : `${base} ${nth[sp.adapter]}`), k = 2;
+    const first = name; while (taken.has(name.toLowerCase())) name = `${first} ${k++}`;
+    taken.add(name.toLowerCase()); return name;
+  });
 }
-const newAgents = () => [...$('nAgents').children].map(tr => tr._get());
-const countAgents = () => { $('nMany').hidden = $('nAgents').children.length <= 5; checkNew(); };
+let activePreset = null;
+function agentRow(spec = {}) {
+  const ad = spec.adapter || (readyAIs()[0] || (adapters[0] || {}).id);
+  const info = adapters.find(x => x.id === ad) || {};
+  const card = document.createElement('div'); card.className = 'acard'; card.dataset.adapter = ad;
+  card.style.setProperty('--c', adapterColors[ad] || '#888');
+  const n = document.createElement('div'); n.className = 'n';
+  const av = document.createElement('span'); av.className = 'av'; av.style.background = adapterColors[ad] || '#888';
+  const nm = document.createElement('input'); nm.maxLength = 40; nm.value = spec.name || ''; nm.title = 'Name (optional)';
+  const aiLabel = document.createElement('span'); aiLabel.className = 'ai'; aiLabel.textContent = info.name || ad;
+  const rm = document.createElement('button'); rm.type = 'button'; rm.className = 'rm'; rm.textContent = '✕';
+  rm.title = 'Remove this agent';
+  rm.onclick = () => { if ($('nAgents').children.length > 1) { card.remove(); activePreset = null; countAgents(); } };
+  n.append(av, nm, aiLabel, rm);
+  const cells = rolePermCells(choicesFor(ad), spec.roles, spec.level, '', spec.focus);
+  const md = document.createElement('input'); md.maxLength = 80; md.value = spec.model || '';
+  md.placeholder = info.needs_model ? 'required' : "the CLI's default";
+  const det = document.createElement('details');
+  const sum = document.createElement('summary'), sumText = document.createElement('span'), more = document.createElement('b');
+  more.textContent = 'More ▾'; sum.append(sumText, more);
+  const lab = t => { const l = document.createElement('label'); l.textContent = t; return l; };
+  const focus = cells.rc.querySelector('input.focus');
+  det.append(sum, lab('Model'), md, lab('Permission'), ...cells.pc.childNodes, lab('Focus (when several agents share a role)'), focus);
+  if (spec.model || spec.level || spec.focus || info.needs_model) det.open = !!(info.needs_model && !spec.model);
+  card.append(n, cells.rc, det);
+  const sel = det.querySelector('select');
+  card._summary = () => {  // "Read · default model" under the roles
+    const lv = sel.value ? levelNames[sel.value] : (sel.options[0] || {}).textContent.replace('Default: ', '');
+    sumText.textContent = `${lv} · ${md.value.trim() || 'default model'}${cells.focus() ? ' · focus: ' + cells.focus() : ''}`;
+  };
+  card._name = nm; card._av = av;
+  card._get = () => ({adapter: ad, name: nm.value.trim(), model: md.value.trim(),
+                      roles: cells.roles(), level: cells.level(), focus: cells.focus()});
+  card.addEventListener('input', e => { if (e.target !== nm) activePreset = null; refreshNew(); });
+  card.addEventListener('change', () => { activePreset = null; refreshNew(); });
+  $('nAgents').append(card); countAgents();
+}
+const newAgents = () => [...$('nAgents').children].map(c => c._get());
+const countAgents = () => { $('nMany').hidden = $('nAgents').children.length <= 5; refreshNew(); checkNew(); };
 let checkNew = () => {};  // set when the dialog opens (watchOverlaps)
 let savedTeams = [];
+function setAgents(list) { $('nAgents').textContent = ''; for (const a of list) agentRow(a); }
 function useTeam(t) {
-  $('nAgents').textContent = '';
-  for (const a of t.agents) agentRow(a);
+  setAgents(t.agents);
   $('nLock').checked = !!t.lock; $('nFix').value = String(t.fix_rounds ?? 1);
   $('nRounds').value = String(t.rounds ?? 1); $('nTeamName').value = t.name;
 }
-$('addAgent').onclick = () => {
-  const rows = newAgents();
-  agentRow({adapter: rows.length ? rows[rows.length - 1].adapter : undefined});  // "another copy" by default
-};
-$('nTeam').onchange = () => {
-  const t = savedTeams.find(x => x.name === $('nTeam').value);
-  if (t) useTeam(t); else { $('nAgents').textContent = ''; defaultAgents(); $('nTeamName').value = ''; }
-};
+const PRESETS = [
+  {id: 'just', label: '🙋 Just chat', tip: 'One agent answers you, like a normal AI chat', make: (A) => [{adapter: A}]},
+  {id: 'build', label: '🔨 Build + review', tip: 'One does the work, another checks it',
+   make: (A, B) => [{adapter: A, roles: ['lead']}, {adapter: B, roles: ['reviewer']}]},
+  {id: 'full', label: '🏗 Full team', tip: 'Plan first (you OK it), then build, then review',
+   make: (A, B) => [{adapter: A, roles: ['planner']}, {adapter: A, roles: ['lead']}, {adapter: B, roles: ['reviewer']}]},
+  {id: 'debate', label: '⚖ Debate club', tip: 'Two agents to argue it out, a Critic as the judge (use ⚖ Debate in the chat)',
+   make: (A, B, C) => [{adapter: A}, {adapter: B}, {adapter: C, roles: ['critic']}]},
+];
+function applyPreset(p) {
+  const r = readyAIs(), A = r[0] || (adapters[0] || {}).id, B = r[1] || A, C = r[2] || A;
+  setAgents(p.make(A, B, C)); activePreset = p.id; refreshNew();
+}
+function showPresets() {
+  const box = $('nPresets'); box.textContent = '';
+  const head = document.createElement('b'); head.textContent = 'Team:'; box.append(head);
+  const chip = (label, tip, on, fn) => {
+    const b = document.createElement('button'); b.type = 'button'; b.textContent = label; b.title = tip;
+    b.classList.toggle('on', on); b.onclick = fn; box.append(b);
+  };
+  for (const p of PRESETS) chip(p.label, p.tip, activePreset === p.id, () => applyPreset(p));
+  for (const t of savedTeams) chip('⭐ ' + t.name, `Your saved team: ${t.agents.length} agents`, activePreset === 'team:' + t.name,
+                                   () => { useTeam(t); activePreset = 'team:' + t.name; refreshNew(); });
+}
+let tileFocus = null;  // after a tile or − is used, the redrawn tile gets the focus back
+function showTiles() {
+  const box = $('nTiles'); box.textContent = '';
+  const counts = {}; for (const c of $('nAgents').children) counts[c.dataset.adapter] = (counts[c.dataset.adapter] || 0) + 1;
+  for (const a of adapters) {
+    const t = document.createElement('button'), n = counts[a.id] || 0; t.type = 'button';
+    t.className = 'tile' + (n ? ' on' : '') + (!a.installed && !a.api ? ' off' : '');
+    t.title = n ? `Add another ${a.name} (each copy is its own session)` : `Add ${a.name}`;
+    const av = document.createElement('span'); av.className = 'av'; av.style.background = a.color || '#888';
+    av.textContent = (a.name || a.id)[0].toUpperCase();
+    t.append(av, a.name);
+    const small = document.createElement('small');
+    small.textContent = a.api ? 'chat API (talk only)' : a.installed ? '' : 'not installed';
+    if (small.textContent) t.append(small);
+    if (n > 1) { const c = document.createElement('span'); c.className = 'cnt'; c.textContent = '×' + n; t.append(c); }
+    t.dataset.focus = 'add:' + a.id;
+    t.onclick = () => { tileFocus = 'add:' + a.id; activePreset = null; agentRow({adapter: a.id}); };  // (agentRow redraws)
+    const wrap = document.createElement('div'); wrap.className = 'twrap'; wrap.append(t);
+    if (n) {  // its own button next to the tile (a button inside a button can't get the keyboard focus)
+      const m = document.createElement('button'); m.type = 'button'; m.className = 'minus'; m.textContent = '−';
+      m.title = `Remove one ${a.name}`; m.setAttribute('aria-label', `Remove one ${a.name}`);
+      m.dataset.focus = 'minus:' + a.id;
+      m.onclick = () => {
+        tileFocus = n > 1 ? 'minus:' + a.id : 'add:' + a.id;  // (the − goes away with the last copy)
+        const cards = [...$('nAgents').children].filter(c => c.dataset.adapter === a.id);
+        if (cards.length && $('nAgents').children.length > 1) { cards[cards.length - 1].remove(); activePreset = null; countAgents(); }
+      };
+      wrap.append(m);
+    }
+    box.append(wrap);
+  }
+  const api = document.createElement('button'); api.type = 'button'; api.className = 'tile'; api.title = 'Add an AI with an API key (Settings → Agents)';
+  const av = document.createElement('span'); av.className = 'av'; av.style.background = '#6b6b66'; av.textContent = '+';
+  const sm = document.createElement('small'); sm.textContent = 'Gemini, GPT, Ollama…';
+  api.append(av, 'API key…', sm); api.onclick = () => openSettings();
+  const wrap = document.createElement('div'); wrap.className = 'twrap'; wrap.append(api);
+  box.append(wrap);
+  if (tileFocus) {
+    const el = [...box.querySelectorAll('[data-focus]')].find(x => x.dataset.focus === tileFocus);
+    if (el) el.focus();
+  }
+  tileFocus = null;
+}
+function newFlowText(specs, names_) {
+  const nm = i => `<b style="color:${adapterColors[specs[i].adapter] || '#888'}">${esc(names_[i])}</b>`;
+  const has = (i, list) => (specs[i].roles || []).some(r => list.includes(r));
+  const parts = [], words = {plan: 'plan', work: 'works', test: 'tests', review: 'reviews'};
+  for (const st of ['plan', 'work', 'test', 'review']) {
+    const ids = specs.map((_, i) => i).filter(i => has(i, STAGE_ROLES[st])); if (!ids.length) continue;
+    parts.push(ids.map(nm).join(' + ') + ' ' + (st === 'plan' ? (ids.length > 1 ? 'plan' : 'plans') : words[st]));
+    if (st === 'plan' && specs.some(sp => (sp.roles || []).includes('planner'))) parts.push('⏸ your OK');
+  }
+  const free = specs.map((_, i) => i).filter(i => !(specs[i].roles || []).some(r => Object.values(STAGE_ROLES).flat().includes(r)));
+  const direct = free.length ? free.map(nm).join(', ') + (free.length > 1 ? ' answer you directly' : ' answers you directly') : '';
+  return [direct, parts.join(' → ')].filter(Boolean).join(' · then ') || '';
+}
+function refreshNew() {  // tiles, presets, names, flow line and the summary follow the cards
+  const cards = [...$('nAgents').children], specs = cards.map(c => c._get()), names_ = autoNames(specs);
+  cards.forEach((c, i) => { c._name.placeholder = names_[i]; c._av.textContent = initials(names_[i]); c._summary(); });
+  showTiles(); showPresets();
+  const flow = newFlowText(specs, names_);
+  $('nFlow').innerHTML = flow || '<span style="color:var(--muted)">Tap an AI above to add it.</span>';
+  const folder = ($('nFolder').value || '').trim();
+  $('nSum').innerHTML = `<b>${specs.length} agent${specs.length === 1 ? '' : 's'}</b> in ${esc(folder.replace(home, '~') || '…')}`;
+  for (const b of $('nRecent').children) b.classList.toggle('on', b.dataset.folder === folder);
+}
+function showRecent() {
+  const box = $('nRecent'); box.textContent = '';
+  for (const f of recentFolders) {
+    const b = document.createElement('button'); b.type = 'button'; b.dataset.folder = f;
+    b.textContent = f.replace(home, '~'); b.title = f;
+    b.onclick = () => { $('nFolder').value = f; refreshNew(); };
+    box.append(b);
+  }
+}
+$('nFolder').addEventListener('input', () => refreshNew());
 function defaultAgents() {
-  const ready = ['claude', 'codex', 'antigravity', 'gemini'].filter(id => (adapters.find(a => a.id === id) || {}).installed);
+  const ready = readyAIs();
   for (const id of ready.slice(0, 2)) agentRow({adapter: id});
   if (!$('nAgents').children.length) agentRow();
 }
 async function openNew(teamName) {
-  newGen++;
-  $('nTitle').value = ''; $('nFolder').value = home || '~'; $('err').textContent = '';
+  newGen++; activePreset = null;
+  $('nTitle').value = ''; $('nFolder').value = recentFolders[0] || home || '~'; $('err').textContent = '';
   $('nTeamMsg').textContent = ''; $('nTeamName').value = '';
   $('nAgents').textContent = ''; $('nLock').checked = false; $('nFix').value = '1'; $('nRounds').value = '1';
   try { savedTeams = (await getConfig()).teams || []; } catch (e) { savedTeams = []; }
-  const sel = $('nTeam'); sel.length = 1;
-  for (const t of savedTeams) { const o = document.createElement('option'); o.value = o.textContent = t.name; sel.append(o); }
-  const t = savedTeams.find(x => x.name === teamName);
-  sel.value = t ? t.name : '';
+  showRecent();
   checkNew = watchOverlaps($('nAgents'), $('nOverlap'), newAgents);
-  if (t) useTeam(t); else defaultAgents();
+  const t = savedTeams.find(x => x.name === teamName);
+  if (t) { useTeam(t); activePreset = 'team:' + t.name; } else defaultAgents();
+  refreshNew();
   $('dlg').showModal(); $('nFolder').focus();
 }
 $('newBtn').onclick = () => openNew();
-$('nSaveTeam').onclick = () => saveTeam($('nTeamName').value, newAgents(),
-  {lock: $('nLock').checked, fix_rounds: +$('nFix').value, rounds: +$('nRounds').value}, $('nTeamMsg'));
+$('settings').addEventListener('close', async () => {  // (an API added from New chat's "API key…" tile)
+  if (!$('dlg').open) return;
+  await loadList(); showTiles(); refreshNew();
+});
+$('nSaveTeam').onclick = async () => {
+  await saveTeam($('nTeamName').value, newAgents(),
+    {lock: $('nLock').checked, fix_rounds: +$('nFix').value, rounds: +$('nRounds').value}, $('nTeamMsg'));
+  try { savedTeams = (await getConfig()).teams || []; } catch (e) {}
+  showPresets();
+};
 $('create').onclick = async e => {
   e.preventDefault();
   const agents = newAgents();
@@ -1394,6 +1786,34 @@ $('create').onclick = async e => {
   if (r.error) { $('err').textContent = r.error; return; }
   $('dlg').close(); openChat(r.id);
 };
+
+// ---- the right panel folds away (remembered per browser); on narrow windows it starts folded
+// and opens over the chat. ☰ shows the chat list on narrow windows.
+const NARROW = () => window.matchMedia('(max-width:900px)').matches;
+function setFold(on, remember = true) {
+  document.body.classList.toggle('folded', on);
+  $('panelBtn').textContent = on ? '⟨ Show panel' : '⟩ Hide panel';
+  $('panelBtn').title = on ? 'Show the team, settings and actions' : 'Hide the panel (the chat gets the full width)';
+  if (remember && !NARROW()) try { localStorage.setItem('gc-panel', on ? 'folded' : 'open'); } catch (e) {}
+}
+(() => { let saved = null; try { saved = localStorage.getItem('gc-panel'); } catch (e) {}
+         setFold(NARROW() || saved === 'folded', false); })();
+$('panelBtn').onclick = () => setFold(!document.body.classList.contains('folded'));
+$('panelHide').onclick = () => setFold(true);
+$('faces').onclick = () => setFold(false);
+$('listBtn').onclick = () => document.body.classList.toggle('list-open');
+document.addEventListener('click', e => {  // narrow windows: a tap outside closes the chat list / the panel
+  if (!NARROW()) return;
+  if (document.body.classList.contains('list-open') && !e.target.closest('aside, #listBtn')) document.body.classList.remove('list-open');
+  if (!document.body.classList.contains('folded') && !e.target.closest('#panel, #panelBtn, #faces, dialog')) setFold(true, false);
+}, true);
+$('search').addEventListener('input', () => loadList());
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && NARROW()) {
+    if (!document.body.classList.contains('folded')) setFold(true, false);
+    document.body.classList.remove('list-open');
+  }
+});
 
 // ---- Settings: Agents (CLIs + chat APIs, Test buttons), Roles (custom), Teams
 let setCfg = {apis: [], roles: [], teams: []};
@@ -1570,13 +1990,13 @@ $('trayClose').onclick = () => {
 };
 
 // ---- ⚖ Debate: For / Against / Neutral, rebuttals, then a verdict (SPEC §7.5)
-$('debateBtn').onclick = async () => {
+async function startDebate() {
   const text = $('t').value.trim();
-  if (!text || !current) { $('t').focus(); $('t').placeholder = 'Write the question to debate first, then press ⚖ Debate'; return; }
+  if (!text || !current) { $('t').focus(); return; }
   const r = await api(`/api/chats/${current}/send`, {text, mode: 'debate'});
   if (r.error) { alert(r.error); return; }
-  $('t').value = ''; updateTo(); lastSig = ''; refresh(); loadList();
-};
+  $('t').value = ''; setMode('msg'); lastSig = ''; refresh(); loadList();
+}
 
 // ---- notifications: tell the user when the open chat finishes or needs them (SPEC §7.4)
 const BASE_TITLE = document.title;
@@ -1588,7 +2008,7 @@ function loadSeen() { try { return JSON.parse(localStorage.getItem('gc-seen') ||
 function saveSeen(x) { try { localStorage.setItem('gc-seen', JSON.stringify(x)); } catch (e) {} }
 function showNotifyBtn() {
   const b = $('notifyBtn'), blocked = 'Notification' in window && Notification.permission === 'denied';
-  b.textContent = notifyOn ? '🔔' : '🔕'; b.classList.toggle('on', notifyOn);
+  b.classList.toggle('on', notifyOn); b.setAttribute('aria-pressed', String(notifyOn));
   b.title = notifyOn
     ? 'Notifications on: a sound and a desktop notification when the agents finish or need you, ' +
       'while this tab is in the background. Click to turn off.' +

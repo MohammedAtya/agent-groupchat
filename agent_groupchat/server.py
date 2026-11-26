@@ -1111,15 +1111,19 @@ def take_endings(reply, meta):
     and a checklist). A reply that is nothing but those stays as it is."""
     if outcome(reply) != "done":
         return reply
-    shown, choices = split_choices(reply)
+    # Testers and Reviewers must end with VERDICT:, so their CHOICES / LOOSE ENDS come just before it
+    lines = reply.rstrip().split("\n")
+    tail = lines.pop() if len(lines) > 1 and VERDICT_RE.search(lines[-1]) else None
+    body = "\n".join(lines) if tail is not None else reply
+    shown, choices = split_choices(body)
     shown, loose = split_loose_ends(shown)
-    if not shown.strip():
+    if not shown.strip() or (not choices and not loose):
         return reply
     if choices:
         meta["choices"] = choices
     if loose:
         meta["loose_ends"] = loose
-    return shown
+    return shown + ("\n" + tail if tail is not None else "")
 
 
 ROLE_VERB = {"plan": "planning", "work": "working", "test": "testing", "review": "reviewing"}

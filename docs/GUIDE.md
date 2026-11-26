@@ -17,8 +17,9 @@ repeating it.
 
 ## 2. Pick a setup
 
-Start small: more agents means more cost and longer turns. Each row is a setup for **+ New chat**
-(save the ones you like with **💾 Save as team**).
+Start small: more agents means more cost and longer turns. Each row is a setup for **+ New**: the
+first ones are one-click presets there (**Just chat**, **Build + review**, **Full team**, **Debate club**);
+save your own with **💾 Save as team**.
 
 | You want… | Agents and roles | Notes |
 |---|---|---|
@@ -55,13 +56,15 @@ Which AI for which role:
   line in the diff to comment on it, then **Send** the comments to the agent that made the change.
 - **Read the ⚠ Loose ends** under a Lead's reply (and on Race/Split cards): what it says is still
   unfinished or temporary.
-- **Change the team any time** with **Team** (roles, focus, permission) or **🔒 Lock** (everyone
+- **Change the team any time** in the panel: **👥 Edit roles & permissions** or the **🔒 Talk-only lock** (everyone
   talk-only, e.g. while you discuss a design).
 - **Long chat getting slow or expensive?** **Compact** summarizes it and the agents continue in
   fresh sessions.
 - **Keep going in a terminal**: the bottom of the chat shows the command to resume each agent's
   session.
-- **Doing something else meanwhile?** Press **🔔** in the chat's header: you get a sound and a
+- **Want more room?** **⟩ Hide panel** gives the chat the full width; the header still shows the agents'
+  faces and what they're doing.
+- **Doing something else meanwhile?** Turn on **🔔 Notifications** in the panel: you get a sound and a
   notification when the agents finish or need you, and the tab title shows how many replies came in.
 - **When an agent offers buttons** under its reply, a click answers that agent; you can still type
   anything else instead.
