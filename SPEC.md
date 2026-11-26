@@ -249,11 +249,29 @@ reply stats, ▸ Diff, Compact, Markdown rendering, Export, skills (`/skill-name
 
 ## 7. Screens
 
+### 7.0 Layout (v0.6)
+Three columns: **chats** (with search) · **the chat** · a **panel** on the right with the Team (one card per agent:
+role, permission, live status ● working / … waiting / ✓ done and its current step; click = edit roles), the chat's
+settings (🔔 notifications, 🔒 Talk-only lock, discussion rounds, fix rounds), actions (edit roles & permissions,
+rename, compact, export, delete) and "Continue in a terminal" (one line per agent with a copy button).
+**⟩ Hide panel** folds it (remembered per browser); the header then shows the agents' faces with status dots and
+what they're doing; **⟨ Show panel** or a click on the faces brings it back. Windows under 900 px start folded and
+the panel opens over the chat; under 700 px the chat list is behind **☰**. A tap outside closes either; Esc too.
+The composer has **tabs** that set what Send does: 💬 Message · ⚡ Race · 🧩 Split (opens the Split dialog) ·
+⚖ Debate; a tab that can't run is greyed out with the reason, and after sending it goes back to Message.
+Agent replies show the name, role and mode as tags and the verdict as a badge (the `VERDICT:` line itself is hidden).
+
 ### 7.1 New chat
-Pick a folder → **+ Add agent** (or "add another copy") → name it, give it role(s) and, if it shares a role, a
-focus → its permissions fill in automatically and can be changed → set fix rounds → start. Overlapping
-roles are warned about under the agents table (§4.4).
-**Save as Team** stores this setup (e.g. "Claude builds, Codex reviews") so it can be reused in one click.
+One dialog with three numbered sections and **Create chat** always visible with a summary:
+1. **Project folder**, with the recent folders as one-click chips.
+2. **Who's in this chat?** One tile per AI (installed CLIs, configured chat APIs, and "API key…" which opens
+   Settings): a tap adds that AI, another tap adds a copy (×2), **−** removes one. Presets: Just chat, Build +
+   review, Full team, Debate club, and every saved team. A line shows the resulting flow ("Claude 1 plans → ⏸ your
+   OK → Claude 2 works → Codex reviews"). One card per agent: name (optional; the placeholder is the name it will
+   get), role pills, and **More ▾** with model, permission (default follows the roles) and focus. Overlapping
+   roles are warned about under the cards (§4.4).
+3. **Options**: chat name, discussion rounds, fix rounds, Talk-only lock, and **Save as team** (stores this setup,
+   e.g. "Claude builds, Codex reviews", so it's a preset next time).
 
 ### 7.2 Settings: 3 tabs
 - **Agents**: auto-detected CLIs (✅ found / ❌ not installed); add chat APIs (address, model, *name of the env variable*
@@ -262,10 +280,10 @@ roles are warned about under the agents table (§4.4).
 - **Teams**: rename, edit, delete saved teams.
 
 ### 7.3 In the chat
-Each agent shows a badge with its name, role(s), permission level, and ⚠ if raised. 🔒 Talk-only lock button in the header.
+Each agent has a card in the panel with its name, role(s), permission level, ⚠ if raised, and its live status (§7.0).
 
 ### 7.4 Notifications and decision buttons
-- **🔔 in the header** (off by default, remembered in the browser): while the tab is in the background, a short
+- **🔔 Notifications** in the panel (off by default, remembered in the browser): while the tab is in the background, a short
   sound plus a desktop notification when the open chat's turn ends (also when it ends between two of the page's
   checks) ("Claude and Codex replied", "…asked you to
   choose", "Failed: …"), a plan waits for **Go ahead**, Split parts wait for an OK, or a Race / Split is done. Turning it on
@@ -274,7 +292,7 @@ Each agent shows a badge with its name, role(s), permission level, and ⚠ if ra
 - **Sidebar:** other chats with new messages since you last opened them get a ● and bold title (counted by
   messages, so renaming a chat doesn't mark it).
 - **Decision buttons:** agents are told they may end a reply with one line `CHOICES: a | b | c` (2–5 options, each
-  up to 80 characters). The server removes that line from the reply and keeps the options (`meta.choices`); the page
+  up to 80 characters; Testers and Reviewers put it just before their closing `VERDICT:` line). The server removes that line from the reply and keeps the options (`meta.choices`); the page
   shows them as buttons under that reply until you send your next message. A click sends `@agent option` with
   `reply_to`, so it answers that agent only, like **↩ Reply**, even if the option names another agent. An invalid line (1 or 6+ options, too long) stays as plain text; Export
   lists the options. Race/Split copy replies don't get buttons.
@@ -371,8 +389,8 @@ Two ways for agents that can edit to work **at the same time**, each in **its ow
 | At the end | Tester + Reviewer compare the copies; **you pick one** (or Combine) | the parts are **merged automatically**, then tested and reviewed |
 
 ### 14.1 Triggers
-- Two buttons next to Send: **⚡ Race** and **🧩 Split**. They send *this one message* that way; every other message
-  works as in v1. Each button is greyed out with the reason when it can't run ("needs 2+ agents that can edit",
+- Two tabs above the message box: **⚡ Race** and **🧩 Split**. They send *this one message* that way; every other
+  message works as in v1. Each tab is greyed out with the reason when it can't run ("needs 2+ agents that can edit",
   "the folder isn't a git repo").
 - **Who takes part:** every agent whose permission is **Edit** or higher (Leads and Participants that can edit).
   Read-only agents (Planner, Critic, Reviewer) don't get a copy.

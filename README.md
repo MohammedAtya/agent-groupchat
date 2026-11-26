@@ -46,14 +46,20 @@ one; if agent-groupchat is already running, it just opens it. Stop it with Ctrl+
 
 ## Quick start
 
-1. **+ New chat**: pick a project folder and the agents. For each one choose the AI, an optional
-   name and model, its **roles** and (optionally) a different **permission**. Or start from a
-   saved **Team**, and **💾 Save as team** to reuse a setup.
+1. **+ New**: pick the project folder (recent ones are one click away), then **tap the AIs** you
+   want (tap again for another copy) or pick a ready-made team (**Just chat**, **Build + review**,
+   **Full team**, **Debate club**, or one you saved). Each agent's card has its **roles**; **More ▾**
+   has the name, model, permission and focus. The line above the cards shows what will happen.
 2. Write a message. The hint above the box says who will answer, e.g.
-   `→ Claude 1 plans → ⏸️ your OK → Claude 2 works → Codex reviews`.
+   `→ Claude 1 plans → ⏸️ your OK → Claude 2 works → Codex reviews`. The tabs above the box switch
+   what **Send** does: 💬 Message, ⚡ Race, 🧩 Split or ⚖ Debate.
 3. **@name** asks one agent directly: `@claude-2`, `@codex`; `@claude` reaches every Claude copy.
 4. While they work you see what each one is doing (`✏️ editing app.py`, `$ pytest`). **■ Stop**
    ends the turn; **▸ Diff** under a reply shows exactly what it changed.
+5. The **panel on the right** has the team (with each agent's live status), the chat's settings
+   (🔔 notifications, 🔒 lock, discussion and fix rounds), actions (edit roles, rename, compact,
+   export, delete) and the commands to continue in a terminal. **⟩ Hide panel** folds it away (the
+   header then shows the agents' faces and what they're doing); **⟨ Show panel** brings it back.
 
 **New here?** The [user guide](https://github.com/MohammedAtya/agent-groupchat/blob/main/docs/GUIDE.md)
 has ready-made team setups, everyday tips and fixes for common problems.
@@ -77,14 +83,14 @@ has ready-made team setups, everyday tips and fixes for common problems.
    and sign in). agent-groupchat uses that login; it never asks for your password.
 2. Start `agent-groupchat` from a terminal where that command works: it finds CLIs on your `PATH`.
 3. **⚙ Settings → Agents** lists every CLI it found. **Test** checks the CLI runs (it doesn't
-   check the login, so do step 1 first). In the AI menu of New chat, a missing one says
-   *(not installed)*.
-4. **+ New chat → + Add agent**, pick the AI, and give it roles. Add the same AI twice for two
+   check the login, so do step 1 first). In **+ New**, a missing one's tile says
+   *not installed*.
+4. **+ New**, tap the AI, and give it roles on its card. Tap the same AI twice for two
    independent copies (*Claude 1*, *Claude 2*), each with its own model if you like.
 
 A chat's agents are fixed when it's created: to change *who* is in it, start a new chat (save
 the old setup with **💾 Save as team** first). Roles, focus and permissions can be changed any
-time under **Team**.
+time in the panel: **👥 Edit roles & permissions**.
 
 ### Add an AI with an API key
 
@@ -173,7 +179,7 @@ in `~/.agent-groupchat/sessions/`, not in your project.
 
 ## ⚡ Race and 🧩 Split
 
-Two buttons next to Send let agents work **at the same time**, each in **its own copy of the
+Two tabs above the message box let agents work **at the same time**, each in **its own copy of the
 project** (a git worktree in `~/.agent-groupchat/worktrees/`). Your project folder isn't touched
 until you press **Use this one**.
 
@@ -216,9 +222,9 @@ until you press **Use this one**.
 | Edit + run commands | edits + commands, sandboxed to the folder | `workspace-write` sandbox | – | `yolo` inside Gemini's sandbox | – | – |
 | Auto | auto mode: a classifier blocks risky actions | "approve for me": an automatic reviewer | – | – | – | – |
 
-- Under **Team** you can raise or lower any agent's permission; ⚠ marks a raised one, and Auto
+- Under **👥 Edit roles & permissions** (in the panel) you can raise or lower any agent's permission; ⚠ marks a raised one, and Auto
   asks you to confirm.
-- **🔒 Lock** drops every agent to *Talk only* at once, and unlocking restores them.
+- **🔒 Talk-only lock** (in the panel) drops every agent to *Talk only* at once, and unlocking restores them.
 - Agents that can edit take turns (one at a time); read-only agents work in parallel.
 - After every reply the folder is compared before and after: a read-only agent that changed files,
   or a Tester that changed non-test code, gets a ⚠ under its reply.
@@ -272,7 +278,7 @@ documents for sandboxing tools. The page notices within about a minute.
 
 ## More features
 
-- **⚖ Debate** (next to Split): write a question and press ⚖ Debate. Each agent argues a side
+- **⚖ Debate** (a tab above the message box): write a question and press ⚖ Debate. Each agent argues a side
   (For, Against, Neutral…), they answer each other once, then an impartial judge (the Critic, else
   the Planner, else the neutral one) gives a verdict, often with decision buttons. Nobody changes
   files.
@@ -285,7 +291,7 @@ documents for sandboxing tools. The page notices within about a minute.
   (`@codex …`, `Claude 2, can you …`) gets an answer from it. After 3 hand-offs in a row
   they pause and the chat says so; reply to let them go on.
 - **Skills**: type `/` for the skills your agents have; a skill runs on the agents that have it.
-- **🔔 Notifications**: turn them on in the chat's header to get a sound and a desktop notification
+- **🔔 Notifications**: turn them on in the panel to get a sound and a desktop notification
   when the agents finish, a plan waits for your OK, or a Race is done, while the tab is in the
   background. The tab title counts new replies, e.g. `(2) Group Chat`, and other chats with new
   messages get a ● in the sidebar.
