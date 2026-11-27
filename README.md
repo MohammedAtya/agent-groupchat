@@ -70,7 +70,7 @@ has ready-made team setups, everyday tips and fixes for common problems.
 |---|---|---|
 | Claude Code | `claude`, logged in | all five |
 | Codex CLI | `codex`, logged in | Talk*, Read, Edit + run commands, Auto |
-| Antigravity (Gemini) | `agy`, logged in | Talk, Read, Edit |
+| Antigravity (Gemini) | `agy`, logged in | Talk, Read, Edit, Edit + run commands (in its terminal sandbox; on Ubuntu see [Enable Antigravity's sandbox](#enable-antigravitys-sandbox-ubuntu)) |
 | Gemini CLI | `gemini`, logged in (Google no longer serves it to personal accounts: use Antigravity) | Talk, Read, Edit, Edit + run commands (needs Docker/Podman; Seatbelt on macOS) |
 | Aider | `aider` + a model name (e.g. `sonnet`) | Talk*, Read, Edit |
 | Chat API | an OpenAI-compatible endpoint | Talk only (it sees the chat, not your files) |
@@ -219,7 +219,7 @@ until you press **Use this one**.
 | Talk only | no tools at all | read-only sandbox, told to only discuss | file, command, MCP and web-page tools denied | every tool denied | ask mode, told to only discuss | ✓ |
 | Read | read/search tools, `git diff/log/status`, tests (in the sandbox) | read-only sandbox | writes, commands and MCP tools denied | read/search tools | ask mode | – |
 | Edit files | edit tools in the folder, **no** commands | – | edits in the folder; commands and MCP tools denied | `auto_edit`: edits, no shell | code mode, no shell, no commits | – |
-| Edit + run commands | edits + commands, sandboxed to the folder | `workspace-write` sandbox | – | `yolo` inside Gemini's sandbox | – | – |
+| Edit + run commands | edits + commands, sandboxed to the folder | `workspace-write` sandbox | edits + commands in its terminal sandbox (only the project folder is writable) | `yolo` inside Gemini's sandbox | – | – |
 | Auto | auto mode: a classifier blocks risky actions | "approve for me": an automatic reviewer | – | – | – | – |
 
 - Under **👥 Edit roles & permissions** (in the panel) you can raise or lower any agent's permission; ⚠ marks a raised one, and Auto
@@ -275,6 +275,32 @@ bwrap --ro-bind / / true && echo "sandbox OK"
 
 This lets `bwrap` (and only `bwrap`) create user namespaces again, which is the setup Ubuntu
 documents for sandboxing tools. The page notices within about a minute.
+
+### Enable Antigravity's sandbox (Ubuntu)
+
+Antigravity (`agy`) uses its own terminal sandbox, not `bwrap`, so where Ubuntu restricts user
+namespaces (the default since **24.04**) AppArmor blocks it too. Until it's fixed, agent-groupchat
+keeps Antigravity at *Edit files* and its chip says *(limited)* (and if it ever got commands
+without the sandbox, `agy` would ask before each one, which a group-chat turn refuses: nothing
+runs). The one-time fix lets `agy` (and only `agy`) create its sandbox:
+
+```bash
+sudo tee /etc/apparmor.d/agy >/dev/null <<'EOF'
+abi <abi/4.0>,
+include <tunables/global>
+
+profile agy /home/YOU/.local/bin/agy flags=(unconfined) {
+  userns,
+  include if exists <local/agy>
+}
+EOF
+sudo apparmor_parser -r /etc/apparmor.d/agy
+```
+
+Replace `/home/YOU/.local/bin/agy` with the output of `readlink -f "$(which agy)"`, then reload
+the page. *Edit + run commands* becomes available for Antigravity: its commands run in its
+sandbox, which can change the project folder (and temporary and build-cache folders) but not the
+rest of your home folder, and anything that would need your approval is refused instead of asked.
 
 ## More features
 

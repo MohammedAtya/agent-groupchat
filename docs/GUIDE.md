@@ -35,8 +35,9 @@ save your own with **💾 Save as team**.
 
 Which AI for which role:
 
-- **Lead / Tester** (they edit and run commands): Claude Code or Codex. Antigravity and Aider
-  can edit but not run commands, so they can't run tests.
+- **Lead / Tester** (they edit and run commands): Claude Code, Codex, or Antigravity (on Ubuntu
+  after its [one-time sandbox fix](../README.md#enable-antigravitys-sandbox-ubuntu)). Aider can
+  edit but not run commands, so it can't run tests.
 - **Reviewer / Planner / Critic** (they read and talk): any AI. A chat API (API key) is a cheap
   extra opinion here.
 - **Same AI twice** is fine: *Claude 1* as Lead and *Claude 2* as Reviewer are separate sessions.
@@ -84,7 +85,8 @@ Which AI for which role:
 | The AI says *(not installed)*, or **Test** says `` `agy` isn't installed (not on PATH) `` | Install it, check the command works in a terminal, then start agent-groupchat **from that terminal**. |
 | An agent's reply is an `(error)` about logging in or authentication | Run that CLI once in a terminal and sign in (**Test** only checks it runs, not the login). |
 | Gemini CLI: *Google no longer serves the Gemini CLI to personal accounts* | Use the **Antigravity** agent (`agy`) instead, or a Gemini chat API with an API key. |
-| *Antigravity tried something that needs your approval…* | Antigravity can't run commands in a group chat. Let it read, edit or review, and give command work (tests, builds) to Claude or Codex. |
+| Antigravity is *(limited)* to Edit files | On Ubuntu its terminal sandbox is blocked: do the [one-time fix](../README.md#enable-antigravitys-sandbox-ubuntu), then reload the page. |
+| *Antigravity tried something that needs your approval…* | It tried something outside its sandbox (e.g. a file outside the project), which a group-chat turn can't approve. Ask it to stay in the project, or give that step to Claude or Codex. |
 | A permission is greyed out | That AI can't enforce it; hover for the reason. Pick another AI for that role. |
 | The chip says *(limited)* / `bwrap: setting up uid map: Permission denied` | Linux sandbox: see [Enable the sandbox](../README.md#enable-the-sandbox-linux). |
 | API **Test**: *The environment variable GEMINI_API_KEY isn't set.* | Set it (see [Add an AI with an API key](../README.md#add-an-ai-with-an-api-key)) and **restart** agent-groupchat from a terminal that has it. |

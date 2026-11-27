@@ -2,6 +2,7 @@
 import json
 import os
 import unittest
+from unittest import mock
 
 from tests.helpers import ChatTest, srv
 from agent_groupchat.adapters import antigravity as agy
@@ -34,14 +35,41 @@ class AntigravityAgent(ChatTest):
                 if level != "talk":
                     self.assertNotIn("read_file(*)", st["permissions"]["deny"])
 
-    def test_no_command_levels(self):
-        for level in ("work", "auto"):
-            with self.subTest(level=level), self.assertRaises(ValueError):
-                srv.parse_agents([a(level)])
-        c = self.chat(agents=[a(roles=["lead"])])  # the Lead role wants commands
-        self.assertEqual(srv.level_info(c, "antigravity")["level"], "edit")
-        self.send(c, "hi")
-        self.assertIn("command(*)", self.settings(self.argv())["permissions"]["deny"])
+    def test_commands_only_in_its_terminal_sandbox(self):
+        with mock.patch.object(agy, "sandbox_problem", return_value=""):
+            c = self.chat(agents=[a(roles=["lead"])])  # the Lead role wants commands
+            self.assertEqual(srv.level_info(c, "antigravity")["level"], "work")
+            self.send(c, "hi")
+        argv = self.argv()
+        self.assertIn("--sandbox", argv)
+        self.assertEqual(argv[argv.index("--mode") + 1], "accept-edits")
+        st = self.settings(argv)
+        self.assertEqual(st["toolPermission"], "proceed-in-sandbox")
+        # no allow rule (it would let commands bypass the sandbox), and empty lists so rules saved
+        # in the user's own agy settings can't apply either
+        self.assertEqual(st["permissions"], {"allow": [], "ask": [], "deny": ["mcp(*)"]})
+
+    def test_every_level_overrides_saved_allow_and_ask_rules(self):
+        for level in ("talk", "read", "edit", "work"):
+            with self.subTest(level=level):
+                p = json.loads(agy.settings(level))["permissions"]
+                self.assertEqual((p["allow"], p["ask"]), ([], []))
+
+    def test_no_commands_when_the_sandbox_cant_start(self):
+        why = "Ubuntu's AppArmor blocks Antigravity's terminal sandbox"
+        with mock.patch.object(agy, "sandbox_problem", return_value=why):
+            c = self.chat(agents=[a(roles=["lead"])])
+            info = srv.level_info(c, "antigravity")
+            self.assertEqual(info["level"], "edit")
+            self.assertIn("AppArmor", info["limited"])
+            self.send(c, "hi")
+        argv = self.argv()
+        self.assertNotIn("--sandbox", argv)
+        self.assertIn("command(*)", self.settings(argv)["permissions"]["deny"])
+
+    def test_no_auto_level(self):
+        with self.assertRaises(ValueError):
+            srv.parse_agents([a("auto")])
 
     def test_both_googles_in_one_chat_keep_their_own_mention(self):
         # agy used to be named "Gemini": its id took @gemini away from the Gemini CLI agents
@@ -119,6 +147,110 @@ class AntigravityAgent(ChatTest):
         self.assertEqual(agy.describe_tool("read_file", {"Path": path}, f), "📖 reading a.py")
         self.assertEqual(agy.describe_tool("edit_file", {"Path": path}, f), "✏️ editing a.py")
         self.assertEqual(agy.describe_tool("run_command", {"CommandLine": "ls -la"}, f), "$ ls -la")
+
+
+class SandboxCheck(unittest.TestCase):
+    """agy runs commands UNSANDBOXED when its sandbox can't start: only offer "work" when it can."""
+    def setUp(self):
+        import tempfile
+        self.dir = tempfile.mkdtemp()
+        self.sysctl = os.path.join(self.dir, "restrict")
+        self.profiles = os.path.join(self.dir, "apparmor.d")
+        os.makedirs(self.profiles)
+        self.exe = os.path.join(self.dir, "agy")
+        open(self.exe, "w").close()
+        os.chmod(self.exe, 0o755)
+        self.clone, self.maxns = os.path.join(self.dir, "clone"), os.path.join(self.dir, "maxns")
+        self.patches = [mock.patch.object(agy, "USERNS_SYSCTL", self.sysctl),
+                        mock.patch.object(agy, "USERNS_CLONE", self.clone),
+                        mock.patch.object(agy, "MAX_USERNS", self.maxns),
+                        mock.patch.object(agy, "APPARMOR_DIR", self.profiles),
+                        mock.patch.object(agy.platform, "system", return_value="Linux"),
+                        mock.patch.object(agy.shutil, "which", return_value=self.exe)]
+        for p in self.patches:
+            p.start()
+
+    def tearDown(self):
+        import shutil
+        for p in self.patches:
+            p.stop()
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def restrict(self, on):
+        with open(self.sysctl, "w") as f:
+            f.write("1\n" if on else "0\n")
+
+    def test_no_restriction(self):
+        self.restrict(False)
+        self.assertEqual(agy.sandbox_problem(), "")
+
+    def test_restricted_without_a_profile(self):
+        self.restrict(True)
+        self.assertIn("AppArmor", agy.sandbox_problem())
+
+    def test_restricted_with_a_profile_for_agy(self):
+        self.restrict(True)
+        with open(os.path.join(self.profiles, "agy"), "w") as f:
+            f.write(f"profile agy {self.exe} flags=(unconfined) {{\n  userns,\n}}\n")
+        self.assertEqual(agy.sandbox_problem(), "")
+
+    def test_a_profile_for_another_program_doesnt_count(self):
+        self.restrict(True)
+        with open(os.path.join(self.profiles, "bwrap"), "w") as f:
+            f.write("profile bwrap /usr/bin/bwrap flags=(unconfined) {\n  userns,\n}\n")
+        self.assertIn("AppArmor", agy.sandbox_problem())
+
+    def profile(self, text, name="agy"):
+        with open(os.path.join(self.profiles, name), "w") as f:
+            f.write(text)
+
+    def test_what_doesnt_count_as_a_profile_for_agy(self):
+        self.restrict(True)
+        cases = {
+            "only in a comment": f"# profile agy {self.exe} {{ userns, }}\n",
+            "deny userns": f"profile agy {self.exe} flags=(unconfined) {{\n  deny userns,\n}}\n",
+            "another path that starts the same": f"profile agy {self.exe}-old flags=(unconfined) {{\n  userns,\n}}\n",
+            "no userns rule": f"profile agy {self.exe} flags=(unconfined) {{\n  file,\n}}\n",
+            "userns only in a comment": f"profile agy {self.exe} {{\n  # userns,\n}}\n",
+        }
+        for why, text in cases.items():
+            with self.subTest(why=why):
+                self.profile(text)
+                self.assertIn("AppArmor", agy.sandbox_problem())
+
+    def test_backups_and_disabled_profiles_dont_count(self):
+        self.restrict(True)
+        good = f"profile agy {self.exe} flags=(unconfined) {{\n  userns,\n}}\n"
+        for name in ("agy.dpkg-old", "agy~", ".agy", "agy.bak"):
+            with self.subTest(name=name):
+                for n in os.listdir(self.profiles):
+                    p = os.path.join(self.profiles, n)
+                    if os.path.isfile(p):
+                        os.remove(p)
+                self.profile(good, name)
+                self.assertIn("AppArmor", agy.sandbox_problem())
+        self.profile(good, "agy")
+        os.makedirs(os.path.join(self.profiles, "disable"), exist_ok=True)
+        open(os.path.join(self.profiles, "disable", "agy"), "w").close()
+        self.assertIn("AppArmor", agy.sandbox_problem())  # disabled
+        os.remove(os.path.join(self.profiles, "disable", "agy"))
+        self.assertEqual(agy.sandbox_problem(), "")
+
+    def test_user_namespaces_switched_off(self):
+        self.restrict(False)
+        for f in (self.clone, self.maxns):
+            with self.subTest(f=os.path.basename(f)):
+                with open(f, "w") as fh:
+                    fh.write("0\n")
+                self.assertIn("user namespaces", agy.sandbox_problem())
+                os.remove(f)
+        self.assertEqual(agy.sandbox_problem(), "")
+
+    def test_other_systems(self):
+        with mock.patch.object(agy.platform, "system", return_value="Darwin"):
+            self.assertEqual(agy.sandbox_problem(), "")
+        with mock.patch.object(agy.platform, "system", return_value="Windows"):
+            self.assertIn("isn't available", agy.sandbox_problem())
 
 
 if __name__ == "__main__":
