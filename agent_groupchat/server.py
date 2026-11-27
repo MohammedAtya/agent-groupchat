@@ -1213,6 +1213,9 @@ def ask(chat, bot, extra="", cap=None, role=None, stage="", force=False, race=Fa
             run_start = time.time()
             with lock:
                 mine = runs.setdefault(chat["id"], {})[bot] = [run_start, None, editor]
+            now = level_of(chat, bot)  # (the Talk-only lock may have been switched on meanwhile)
+            if rank(now) < rank(level):
+                level = now
             try:
                 reply, meta = run_agent(chat, bot, prompt, level)
             except Exception as e:
@@ -1754,9 +1757,10 @@ def race_context(chat, r):
         return text
     if not r.get("summary"):
         first = agent_ids(chat)[0]
+        own = level_of(chat, first)  # (never more than its own level, nor the lock allows)
         reply, _ = run_agent(chat, first, text[-150_000:] + SUMMARY_FOR_RACE, "read" if
-                             can_use(adapter_of(chat, first), "read", sandbox_ok()) else "talk",
-                             fresh=True)
+                             rank(own) >= rank("read") and can_use(adapter_of(chat, first), "read", sandbox_ok())
+                             and not chat.get("lock") else "talk", fresh=True)
         r["summary"] = reply if outcome(reply) == "done" else text[-CONTEXT_LIMIT:]
     return "(Summary of the group chat so far:)\n" + r["summary"]
 

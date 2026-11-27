@@ -180,15 +180,27 @@ New chat screen **grey that combination out and give the reason**. The app never
 | talk | ✅ `--tools ""` (no tools) | ⚠ read-only sandbox, told to only discuss¹ | ✅ Default mode + deny rules for read, write, command, MCP and URL tools | ✅ policy denying every tool | ⚠ ask mode, told to only discuss¹ | ✅ (has no tools) |
 | read | ✅ read tools + `git diff/log/status`, tests in the sandbox | ✅ `read-only` sandbox | ✅ deny write, command and MCP tools | ✅ `--approval-mode default` | ✅ ask mode | ❌ |
 | edit | ✅ edit tools, no Bash | ❌ no "edit but no commands" setting | ✅ deny command and MCP tools | ✅ `--approval-mode auto_edit` | ✅ code mode, shell commands off, no auto-commits | ❌ |
-| edit + commands | ✅ sandboxed Bash (bubblewrap / macOS) | ✅ `workspace-write` (bubblewrap / macOS) | ❌ commands need an approval a headless turn can't give² | ✅ `yolo` inside `--sandbox` (needs Docker/Podman, or Seatbelt on macOS) | ❌ no sandbox | ❌ |
+| edit + commands | ✅ sandboxed Bash (bubblewrap / macOS) | ✅ `workspace-write` (bubblewrap / macOS) | ✅ `--sandbox --mode accept-edits`, tool policy `proceed-in-sandbox`, MCP denied (needs agy's sandbox)² | ✅ `yolo` inside `--sandbox` (needs Docker/Podman, or Seatbelt on macOS) | ❌ no sandbox | ❌ |
 | auto | ✅ auto mode | ✅ approve-for-me (needs the sandbox) | ❌² | ❌ | ❌ | ❌ |
 
 ¹ The AI can still read files; it's told to only discuss, and the after-reply check (§5.4) flags any change.
 ² Antigravity's rules come per run in `--settings` (never saved). A denied tool just fails and the agent carries on; a
-tool that would need approval ends a headless `agy` turn, so the app explains that error instead.
+tool that would need approval is auto-denied in a headless `agy` turn (often ending it), so the app explains that error
+instead. *edit + commands*: commands run without asking but only inside agy's terminal sandbox, where the project
+folder is the only writable place (verified on agy 1.5.18: writes to the home folder fail, the file tools' writes
+outside the project are auto-denied; Google's docs also list temporary and build-cache folders as writable); there is
+deliberately no `command(*)` allow rule, which would let commands run outside the sandbox. The level is only offered when
+agy's sandbox can start: macOS, or Linux with user namespaces allowed (`unprivileged_userns_clone` / `max_user_namespaces`
+not 0) and either no Ubuntu AppArmor user-namespace restriction or a profile that attaches to agy's path and allows
+`userns` (comments, `deny userns` and other paths don't count; README); otherwise it's *(limited)* with the fix as the
+reason. Native Windows: not offered. If the check is ever wrong, agy falls back to asking before each command, which a
+headless turn auto-denies (verified on 1.5.18 with these settings): commands are refused, never run unsandboxed.
+Every level sends **empty** `allow` and `ask` lists: `--settings` keeps lists it isn't given from the user's saved agy settings,
+and a saved allow rule would let matching commands run unsandboxed when the sandbox can't start (verified; empty lists stop it).
+The Talk-only lock also applies to an agent that was waiting for its turn when you switched it on.
 A level an AI can't enforce is greyed out; a level that needs a missing sandbox drops to the next
 level down, and the agent's chip says *(limited)* with the reason. Verified against Claude Code 2.1,
-Codex CLI 0.171, Antigravity CLI 1.5, Gemini CLI 0.70 (installed source) and Aider 0.86 (docs + source).
+Codex CLI 0.171, Antigravity CLI 1.5.18, Gemini CLI 0.70 (installed source) and Aider 0.86 (docs + source).
 
 ### 5.4 After-reply check
 After every reply, the app compares the folder before and after. If an agent changed files its level didn't allow

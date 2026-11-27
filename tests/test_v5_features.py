@@ -290,5 +290,42 @@ class StopWhilePlanWaits(ChatTest):
         self.assertIn("Workflow · Lead", p)
 
 
+class LockWhileWaiting(ChatTest):
+    def test_talk_only_lock_switched_on_while_an_agent_waits_for_its_turn(self):
+        import threading
+        c = self.chat(agents=["claude", "codex"])
+        srv.add_msg(c, "user", "build it", to=["claude"], status={"claude": "queued"})
+        levels, real = [], srv.run_agent
+        def spy(chat, bot, prompt_, level, **kw):
+            levels.append(level)
+            return real(chat, bot, prompt_, level, **kw)
+        lock = srv.edit_locks.setdefault(c["id"], threading.Lock())
+        lock.acquire()  # another agent is editing
+        srv.run_agent = spy
+        try:
+            t = threading.Thread(target=srv.ask, args=(c, "claude"))
+            t.start()
+            import time; time.sleep(0.3)
+            c["lock"] = True  # you switch the Talk-only lock on meanwhile
+            lock.release()
+            t.join(10)
+        finally:
+            srv.run_agent = real
+        self.assertEqual(levels, ["talk"])
+
+
+    def test_race_summary_never_more_than_the_agents_own_level(self):
+        c = self.chat(agents=[{"adapter": "claude", "level": "talk"}, "codex"])
+        for i in range(3):
+            srv.add_msg(c, "user", "x" * (srv.CONTEXT_LIMIT // 2))
+        levels, real = [], srv.run_agent
+        srv.run_agent = lambda chat, bot, prompt_, level, **kw: (levels.append((bot, level)), ("summary", {}))[1]
+        try:
+            srv.race_context(c, {"msg": len(c["messages"])})
+        finally:
+            srv.run_agent = real
+        self.assertEqual(levels, [("claude", "talk")])
+
+
 if __name__ == "__main__":
     unittest.main()
